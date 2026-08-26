@@ -85,6 +85,26 @@ func runWithDependencies(ctx context.Context, args []string, output io.Writer, l
 	flags.SetOutput(output)
 	archivePath := flags.String("output", "dives.yaml", "path to the YAML dive archive")
 	tokenPath := flags.String("token-file", filepath.Join(configDirectory, "go-garmindives", "tokens.json"), "path to the Garmin token cache")
+	flags.Usage = func() {
+		_, _ = fmt.Fprintln(output, `go-garmindives downloads every Garmin Connect dive into one YAML archive.
+On later runs it reuses cached tokens and fetches only activity IDs that are
+not already present in the archive.
+
+Usage:
+  go-garmindives [options]
+
+Options:`)
+		flags.PrintDefaults()
+		_, _ = fmt.Fprintln(output, `
+Environment:
+  GARMIN_EMAIL      Garmin account email; prompted when required and unset
+  GARMIN_PASSWORD   Garmin password; securely prompted when required and unset
+  GARMIN_MFA_CODE   Current one-time MFA code; prompted when Garmin requests it
+  LOG_LEVEL         Console verbosity: debug, info, warn, error, or fatal
+
+Credentials are only needed when no reusable token cache exists. Passwords and
+MFA codes are never written to disk.`)
+	}
 	if err := flags.Parse(args); errors.Is(err, flag.ErrHelp) {
 		return nil
 	} else if err != nil {

@@ -48,12 +48,20 @@ func TestRunHelp(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer input.Close()
-	var output bytes.Buffer
-	if err := run(context.Background(), []string{"-help"}, input, &output, testLogger(t)); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(output.String(), "Usage of go-garmindives") {
-		t.Fatalf("help output = %q", output.String())
+	for _, argument := range []string{"-h", "--help"} {
+		var output bytes.Buffer
+		if err := run(context.Background(), []string{argument}, input, &output, testLogger(t)); err != nil {
+			t.Fatal(err)
+		}
+		for _, expected := range []string{
+			"downloads every Garmin Connect dive",
+			"GARMIN_EMAIL", "GARMIN_PASSWORD", "GARMIN_MFA_CODE", "LOG_LEVEL",
+			"-output", "-token-file",
+		} {
+			if !strings.Contains(output.String(), expected) {
+				t.Fatalf("help output for %s does not contain %q: %q", argument, expected, output.String())
+			}
+		}
 	}
 }
 
@@ -152,7 +160,7 @@ func TestRunWithDependenciesErrors(t *testing.T) {
 	if err := runWithDependencies(context.Background(), []string{"-help"}, &output, testLogger(t), dependencies); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output.String(), "Usage of go-garmindives") {
+	if !strings.Contains(output.String(), "Usage:") {
 		t.Fatalf("help output = %q", output.String())
 	}
 }
