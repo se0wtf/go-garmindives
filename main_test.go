@@ -5,12 +5,42 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"strings"
 	"testing"
 
+	charmLog "github.com/charmbracelet/log"
 	garmin "github.com/se0wtf/go-garminconnect"
 )
+
+func testLogger(t *testing.T) *charmLog.Logger {
+	t.Helper()
+	logger, err := newAppLogger(io.Discard, "debug")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return logger
+}
+
+func TestAppLoggerLevels(t *testing.T) {
+	var output bytes.Buffer
+	logger, err := newAppLogger(&output, "debug")
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger.Debug("details", "dives", 2)
+	logger.Info("ready")
+	logger.Error("failed", "err", errors.New("test failure"))
+	for _, expected := range []string{"DEBU", "details", "INFO", "ready", "ERRO", "failed"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatalf("log output %q does not contain %q", output.String(), expected)
+		}
+	}
+	if _, err := newAppLogger(io.Discard, "invalid"); err == nil {
+		t.Fatal("expected invalid level error")
+	}
+}
 
 func TestRunHelp(t *testing.T) {
 	input, err := os.Open(os.DevNull)
@@ -19,7 +49,7 @@ func TestRunHelp(t *testing.T) {
 	}
 	defer input.Close()
 	var output bytes.Buffer
-	if err := run(context.Background(), []string{"-help"}, input, &output); err != nil {
+	if err := run(context.Background(), []string{"-help"}, input, &output, testLogger(t)); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(output.String(), "Usage of go-garmindives") {
@@ -51,14 +81,14 @@ func TestRunWithDependencies(t *testing.T) {
 		loginFresh: func(context.Context, string) (diveClient, error) { return nil, errors.New("unexpected login") },
 	}
 	var output bytes.Buffer
-	err := runWithDependencies(context.Background(), []string{"-output", "export.yaml"}, &output, dependencies)
+	err := runWithDependencies(context.Background(), []string{"-output", "export.yaml"}, &output, testLogger(t), dependencies)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if savedPath != "export.yaml" || loadedTokenPath != "/config/go-garmindives/tokens.json" {
 		t.Fatalf("paths = %q / %q", savedPath, loadedTokenPath)
 	}
-	if len(saved.Dives) != 1 || !strings.Contains(output.String(), "1 new dive(s); 1 total") {
+	if len(saved.Dives) != 1 {
 		t.Fatalf("saved=%#v output=%q", saved, output.String())
 	}
 }
@@ -74,7 +104,7 @@ func TestRunWithDependenciesDoesNotRewriteUnchangedArchive(t *testing.T) {
 		},
 		loginFresh: func(context.Context, string) (diveClient, error) { return nil, errors.New("unexpected login") },
 	}
-	if err := runWithDependencies(context.Background(), nil, &bytes.Buffer{}, dependencies); err != nil {
+	if err := runWithDependencies(context.Background(), nil, &bytes.Buffer{}, testLogger(t), dependencies); err != nil {
 		t.Fatal(err)
 	}
 	if saveCalls != 0 {
@@ -112,14 +142,14 @@ func TestRunWithDependenciesErrors(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			dependencies := base()
 			test.edit(&dependencies)
-			if err := runWithDependencies(context.Background(), test.args, &bytes.Buffer{}, dependencies); err == nil {
+			if err := runWithDependencies(context.Background(), test.args, &bytes.Buffer{}, testLogger(t), dependencies); err == nil {
 				t.Fatal("expected error")
 			}
 		})
 	}
 	dependencies := base()
 	var output bytes.Buffer
-	if err := runWithDependencies(context.Background(), []string{"-help"}, &output, dependencies); err != nil {
+	if err := runWithDependencies(context.Background(), []string{"-help"}, &output, testLogger(t), dependencies); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(output.String(), "Usage of go-garmindives") {
@@ -134,6 +164,7 @@ func TestSyncWithAuthenticationUsesCache(t *testing.T) {
 	added, err := syncWithAuthentication(context.Background(), &archive,
 		func() (diveClient, error) { return cached, nil },
 		func() (diveClient, error) { loginCalls++; return nil, nil },
+		testLogger(t),
 	)
 	if err != nil || added != 0 || loginCalls != 0 {
 		t.Fatalf("added=%d loginCalls=%d err=%v", added, loginCalls, err)
@@ -147,6 +178,7 @@ func TestSyncWithAuthenticationLogsInWithoutCache(t *testing.T) {
 	_, err := syncWithAuthentication(context.Background(), &archive,
 		func() (diveClient, error) { return nil, garmin.ErrNoTokenFile },
 		func() (diveClient, error) { loginCalls++; return fresh, nil },
+		testLogger(t),
 	)
 	if err != nil || loginCalls != 1 {
 		t.Fatalf("loginCalls=%d err=%v", loginCalls, err)
@@ -161,6 +193,7 @@ func TestSyncWithAuthenticationReauthenticatesExpiredSession(t *testing.T) {
 	_, err := syncWithAuthentication(context.Background(), &archive,
 		func() (diveClient, error) { return cached, nil },
 		func() (diveClient, error) { loginCalls++; return fresh, nil },
+		testLogger(t),
 	)
 	if err != nil || loginCalls != 1 {
 		t.Fatalf("loginCalls=%d err=%v", loginCalls, err)
@@ -174,6 +207,7 @@ func TestSyncWithAuthenticationDoesNotHideCacheErrors(t *testing.T) {
 	_, err := syncWithAuthentication(context.Background(), &archive,
 		func() (diveClient, error) { return nil, wantErr },
 		func() (diveClient, error) { loginCalls++; return nil, nil },
+		testLogger(t),
 	)
 	if !errors.Is(err, wantErr) || loginCalls != 0 {
 		t.Fatalf("loginCalls=%d err=%v", loginCalls, err)

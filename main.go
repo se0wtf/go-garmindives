@@ -9,21 +9,46 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
+	"time"
 
+	charmLog "github.com/charmbracelet/log"
 	garmin "github.com/se0wtf/go-garminconnect"
 )
 
 func main() {
+	logger, err := newAppLogger(os.Stderr, os.Getenv("LOG_LEVEL"))
+	if err != nil {
+		charmLog.Error("invalid logger configuration", "err", err)
+		os.Exit(1)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx, os.Args[1:], os.Stdin, os.Stdout); err != nil {
-		_, _ = fmt.Fprintln(os.Stderr, "go-garmindives:", err)
+	if err := run(ctx, os.Args[1:], os.Stdin, os.Stdout, logger); err != nil {
+		logger.Error("application failed", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, args []string, input *os.File, output io.Writer) error {
+func newAppLogger(output io.Writer, configuredLevel string) (*charmLog.Logger, error) {
+	level := charmLog.InfoLevel
+	if configuredLevel = strings.TrimSpace(configuredLevel); configuredLevel != "" {
+		parsed, err := charmLog.ParseLevel(configuredLevel)
+		if err != nil {
+			return nil, fmt.Errorf("parse LOG_LEVEL: %w", err)
+		}
+		level = parsed
+	}
+	return charmLog.NewWithOptions(output, charmLog.Options{
+		Level:           level,
+		Prefix:          "go-garmindives",
+		ReportTimestamp: true,
+		TimeFormat:      time.TimeOnly,
+	}), nil
+}
+
+func run(ctx context.Context, args []string, input *os.File, output io.Writer, logger *charmLog.Logger) error {
 	prompt := newTerminalPrompter(input, output)
 	dependencies := appDependencies{
 		configDirectory: os.UserConfigDir,
@@ -36,7 +61,7 @@ func run(ctx context.Context, args []string, input *os.File, output io.Writer) e
 			return login(ctx, path, prompt)
 		},
 	}
-	return runWithDependencies(ctx, args, output, dependencies)
+	return runWithDependencies(ctx, args, output, logger, dependencies)
 }
 
 type appDependencies struct {
@@ -47,7 +72,7 @@ type appDependencies struct {
 	loginFresh      func(context.Context, string) (diveClient, error)
 }
 
-func runWithDependencies(ctx context.Context, args []string, output io.Writer, dependencies appDependencies) error {
+func runWithDependencies(ctx context.Context, args []string, output io.Writer, logger *charmLog.Logger, dependencies appDependencies) error {
 	configDirectory, err := dependencies.configDirectory()
 	if err != nil {
 		return fmt.Errorf("find user configuration directory: %w", err)
@@ -61,6 +86,7 @@ func runWithDependencies(ctx context.Context, args []string, output io.Writer, d
 	} else if err != nil {
 		return err
 	}
+	logger.Debug("configuration resolved", "archive", *archivePath, "token_cache", *tokenPath)
 
 	archive, existed, err := dependencies.loadArchive(*archivePath)
 	if err != nil {
@@ -72,7 +98,9 @@ func runWithDependencies(ctx context.Context, args []string, output io.Writer, d
 	loginFresh := func() (diveClient, error) {
 		return dependencies.loginFresh(ctx, *tokenPath)
 	}
-	added, err := syncWithAuthentication(ctx, &archive, loadCached, loginFresh)
+	logger.Debug("archive loaded", "exists", existed, "dives", len(archive.Dives))
+	logger.Info("synchronizing Garmin dives")
+	added, err := syncWithAuthentication(ctx, &archive, loadCached, loginFresh, logger)
 	if err != nil {
 		return err
 	}
@@ -80,17 +108,21 @@ func runWithDependencies(ctx context.Context, args []string, output io.Writer, d
 		if err := dependencies.saveArchive(*archivePath, archive); err != nil {
 			return err
 		}
+		logger.Debug("archive saved", "path", *archivePath)
 	}
-	_, err = fmt.Fprintf(output, "%d new dive(s); %d total\n", added, len(archive.Dives))
-	return err
+	logger.Info("synchronization complete", "new_dives", added, "total_dives", len(archive.Dives))
+	return nil
 }
 
 type clientLoader func() (diveClient, error)
 
-func syncWithAuthentication(ctx context.Context, archive *Archive, loadCached, loginFresh clientLoader) (int, error) {
+func syncWithAuthentication(ctx context.Context, archive *Archive, loadCached, loginFresh clientLoader, logger *charmLog.Logger) (int, error) {
 	client, err := loadCached()
 	if errors.Is(err, garmin.ErrNoTokenFile) {
+		logger.Debug("token cache not found; requesting Garmin credentials")
 		client, err = loginFresh()
+	} else if err == nil {
+		logger.Debug("using cached Garmin session")
 	}
 	if err != nil {
 		return 0, fmt.Errorf("authenticate with Garmin: %w", err)
@@ -99,6 +131,7 @@ func syncWithAuthentication(ctx context.Context, archive *Archive, loadCached, l
 	if !errors.Is(err, garmin.ErrSessionExpired) {
 		return added, err
 	}
+	logger.Info("cached Garmin session expired; requesting credentials")
 	client, err = loginFresh()
 	if err != nil {
 		return 0, fmt.Errorf("reauthenticate with Garmin: %w", err)
