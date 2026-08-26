@@ -1,5 +1,5 @@
-github.com/se0wtf/go-garminconnect v0.1.0 h1:fwPudK7Fk8QTXoKYjKIZkcNOOZnsoLO9ip967BLXJzY=
-github.com/se0wtf/go-garminconnect v0.1.0/go.mod h1:iinVEY/sZhNRTFKTP0WHDroYRQuBq+Pc4vPxlbeOoYo=
+github.com/se0wtf/go-garminconnect v0.1.1 h1:G5ZUECbzU03ybSpRaMANvrR8aF0CwxdI3Hru2wHBnnA=
+github.com/se0wtf/go-garminconnect v0.1.1/go.mod h1:iinVEY/sZhNRTFKTP0WHDroYRQuBq+Pc4vPxlbeOoYo=
 go.yaml.in/yaml/v3 v3.0.4 h1:tfq32ie2Jv2UxXFdLJdh3jXuOzWiL1fo0bu/FbuKpbc=
 go.yaml.in/yaml/v3 v3.0.4/go.mod h1:DhzuOOF2ATzADvBadXxruRBLzYTpT36CKvDb3+aBEFg=
 golang.org/x/sys v0.36.0 h1:KVRy2GtZBrk1cBYA7MKu5bEZFxQk4NIDV6RLVcC8o0k=

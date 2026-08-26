@@ -1,3 +1,4 @@
 .env
 dives.yaml
 coverage.out
+/go-garmindives
