@@ -19,8 +19,8 @@ type credentials struct {
 }
 
 type prompter interface {
-	Line(string) (string, error)
-	Secret(string) (string, error)
+	Line(context.Context, string) (string, error)
+	Secret(context.Context, string) (string, error)
 }
 
 type terminalPrompter struct {
@@ -33,44 +33,77 @@ func newTerminalPrompter(input *os.File, output io.Writer) *terminalPrompter {
 	return &terminalPrompter{input: input, reader: bufio.NewReader(input), output: output}
 }
 
-func (p *terminalPrompter) Line(label string) (string, error) {
+func (p *terminalPrompter) Line(ctx context.Context, label string) (string, error) {
 	if _, err := fmt.Fprint(p.output, label); err != nil {
 		return "", err
 	}
-	value, err := p.reader.ReadString('\n')
+	value, err := awaitPrompt(ctx, func() (string, error) {
+		return p.reader.ReadString('\n')
+	}, nil)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return "", err
 	}
 	return strings.TrimSpace(value), nil
 }
 
-func (p *terminalPrompter) Secret(label string) (string, error) {
+func (p *terminalPrompter) Secret(ctx context.Context, label string) (string, error) {
 	if !term.IsTerminal(int(p.input.Fd())) {
 		return "", errors.New("password prompt requires a terminal; set GARMIN_PASSWORD")
 	}
 	if _, err := fmt.Fprint(p.output, label); err != nil {
 		return "", err
 	}
-	value, err := term.ReadPassword(int(p.input.Fd()))
+	state, err := term.GetState(int(p.input.Fd()))
+	if err != nil {
+		return "", err
+	}
+	value, err := awaitPrompt(ctx, func() (string, error) {
+		password, readErr := term.ReadPassword(int(p.input.Fd()))
+		return string(password), readErr
+	}, func() {
+		_ = term.Restore(int(p.input.Fd()), state)
+	})
 	_, _ = fmt.Fprintln(p.output)
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(value)), nil
+	return strings.TrimSpace(value), nil
 }
 
-func readCredentials(prompt prompter) (credentials, error) {
+type promptResult struct {
+	value string
+	err   error
+}
+
+func awaitPrompt(ctx context.Context, read func() (string, error), cancel func()) (string, error) {
+	result := make(chan promptResult, 1)
+	go func() {
+		value, err := read()
+		result <- promptResult{value: value, err: err}
+	}()
+	select {
+	case result := <-result:
+		return result.value, result.err
+	case <-ctx.Done():
+		if cancel != nil {
+			cancel()
+		}
+		return "", ctx.Err()
+	}
+}
+
+func readCredentials(ctx context.Context, prompt prompter) (credentials, error) {
 	email := strings.TrimSpace(os.Getenv("GARMIN_EMAIL"))
 	password := os.Getenv("GARMIN_PASSWORD")
 	var err error
 	if email == "" {
-		email, err = prompt.Line("Garmin email: ")
+		email, err = prompt.Line(ctx, "Garmin email: ")
 		if err != nil {
 			return credentials{}, fmt.Errorf("read Garmin email: %w", err)
 		}
 	}
 	if password == "" {
-		password, err = prompt.Secret("Garmin password: ")
+		password, err = prompt.Secret(ctx, "Garmin password: ")
 		if err != nil {
 			return credentials{}, fmt.Errorf("read Garmin password: %w", err)
 		}
@@ -82,15 +115,15 @@ func readCredentials(prompt prompter) (credentials, error) {
 }
 
 func login(ctx context.Context, tokenFile string, prompt prompter) (*garmin.Client, error) {
-	credentials, err := readCredentials(prompt)
+	credentials, err := readCredentials(ctx, prompt)
 	if err != nil {
 		return nil, err
 	}
-	mfa := func(context.Context) (string, error) {
+	mfa := func(providerCtx context.Context) (string, error) {
 		if code := strings.TrimSpace(os.Getenv("GARMIN_MFA_CODE")); code != "" {
 			return code, nil
 		}
-		return prompt.Line("Garmin MFA code: ")
+		return prompt.Line(providerCtx, "Garmin MFA code: ")
 	}
 	return garmin.Login(ctx, credentials.Email, credentials.Password, mfa, garmin.WithTokenFile(tokenFile))
 }

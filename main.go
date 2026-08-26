@@ -26,6 +26,10 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx, os.Args[1:], os.Stdin, os.Stdout, logger); err != nil {
+		if errors.Is(err, context.Canceled) {
+			logger.Info("interrupted")
+			return
+		}
 		logger.Error("application failed", "err", err)
 		os.Exit(1)
 	}

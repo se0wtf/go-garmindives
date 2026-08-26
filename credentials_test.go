@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
+	"sync/atomic"
 	"testing"
 )
 
@@ -19,11 +21,11 @@ func TestTerminalPrompterLine(t *testing.T) {
 	writer.Close()
 	var output bytes.Buffer
 	prompt := newTerminalPrompter(reader, &output)
-	value, err := prompt.Line("Label: ")
+	value, err := prompt.Line(context.Background(), "Label: ")
 	if err != nil || value != "value" || output.String() != "Label: " {
 		t.Fatalf("value=%q output=%q err=%v", value, output.String(), err)
 	}
-	if _, err := prompt.Secret("Secret: "); err == nil {
+	if _, err := prompt.Secret(context.Background(), "Secret: "); err == nil {
 		t.Fatal("expected non-terminal secret error")
 	}
 }
@@ -36,7 +38,7 @@ type fakePrompter struct {
 	err         error
 }
 
-func (p *fakePrompter) Line(string) (string, error) {
+func (p *fakePrompter) Line(context.Context, string) (string, error) {
 	p.lineCalls++
 	if p.err != nil {
 		return "", p.err
@@ -48,7 +50,7 @@ func (p *fakePrompter) Line(string) (string, error) {
 	return value, nil
 }
 
-func (p *fakePrompter) Secret(string) (string, error) {
+func (p *fakePrompter) Secret(context.Context, string) (string, error) {
 	p.secretCalls++
 	if p.err != nil {
 		return "", p.err
@@ -60,7 +62,7 @@ func TestReadCredentialsFromEnvironment(t *testing.T) {
 	t.Setenv("GARMIN_EMAIL", "runner@example.com")
 	t.Setenv("GARMIN_PASSWORD", "secret")
 	prompt := &fakePrompter{}
-	got, err := readCredentials(prompt)
+	got, err := readCredentials(context.Background(), prompt)
 	if err != nil || got.Email != "runner@example.com" || got.Password != "secret" {
 		t.Fatalf("credentials=%#v err=%v", got, err)
 	}
@@ -73,7 +75,7 @@ func TestReadCredentialsPromptsForMissingValues(t *testing.T) {
 	t.Setenv("GARMIN_EMAIL", "")
 	t.Setenv("GARMIN_PASSWORD", "")
 	prompt := &fakePrompter{lines: []string{"runner@example.com"}, secret: "secret"}
-	got, err := readCredentials(prompt)
+	got, err := readCredentials(context.Background(), prompt)
 	if err != nil || got.Email != "runner@example.com" || got.Password != "secret" {
 		t.Fatalf("credentials=%#v err=%v", got, err)
 	}
@@ -86,10 +88,59 @@ func TestReadCredentialsErrors(t *testing.T) {
 	t.Setenv("GARMIN_EMAIL", "")
 	t.Setenv("GARMIN_PASSWORD", "")
 	wantErr := errors.New("prompt failed")
-	if _, err := readCredentials(&fakePrompter{err: wantErr}); !errors.Is(err, wantErr) {
+	if _, err := readCredentials(context.Background(), &fakePrompter{err: wantErr}); !errors.Is(err, wantErr) {
 		t.Fatalf("error = %v", err)
 	}
-	if _, err := readCredentials(&fakePrompter{}); err == nil {
+	if _, err := readCredentials(context.Background(), &fakePrompter{}); err == nil {
 		t.Fatal("expected empty credentials error")
 	}
+}
+
+func TestAwaitPromptCancellation(t *testing.T) {
+	ctx, cancelContext := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var cancelCalls atomic.Int32
+	result := make(chan error, 1)
+	go func() {
+		_, err := awaitPrompt(ctx, func() (string, error) {
+			close(started)
+			<-release
+			return "late value", nil
+		}, func() { cancelCalls.Add(1) })
+		result <- err
+	}()
+	<-started
+	cancelContext()
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v", err)
+	}
+	if cancelCalls.Load() != 1 {
+		t.Fatalf("cancel calls = %d", cancelCalls.Load())
+	}
+	close(release)
+}
+
+func TestReadCredentialsCancellation(t *testing.T) {
+	t.Setenv("GARMIN_EMAIL", "")
+	t.Setenv("GARMIN_PASSWORD", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	prompt := &contextPrompter{}
+	_, err := readCredentials(ctx, prompt)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+type contextPrompter struct{}
+
+func (*contextPrompter) Line(ctx context.Context, _ string) (string, error) {
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
+func (*contextPrompter) Secret(ctx context.Context, _ string) (string, error) {
+	<-ctx.Done()
+	return "", ctx.Err()
 }
