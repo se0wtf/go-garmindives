@@ -89,7 +89,12 @@ func TestRunWithDependencies(t *testing.T) {
 		loginFresh: func(context.Context, string) (diveClient, error) { return nil, errors.New("unexpected login") },
 	}
 	var output bytes.Buffer
-	err := runWithDependencies(context.Background(), []string{"-output", "export.yaml"}, &output, testLogger(t), dependencies)
+	var logOutput bytes.Buffer
+	logger, err := newAppLogger(&logOutput, "debug")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = runWithDependencies(context.Background(), []string{"-output", "export.yaml"}, &output, logger, dependencies)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,6 +103,9 @@ func TestRunWithDependencies(t *testing.T) {
 	}
 	if len(saved.Dives) != 1 {
 		t.Fatalf("saved=%#v output=%q", saved, output.String())
+	}
+	if !strings.Contains(logOutput.String(), "synchronisation in progress... (1/1)") {
+		t.Fatalf("progress log = %q", logOutput.String())
 	}
 }
 

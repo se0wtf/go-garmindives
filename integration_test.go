@@ -22,7 +22,7 @@ func TestGarminDiveIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	archive := newArchive()
-	added, err := syncDives(context.Background(), client, &archive)
+	added, err := syncDives(context.Background(), client, &archive, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func TestGarminDiveIntegration(t *testing.T) {
 	if err != nil || !existed || len(loaded.Dives) != added {
 		t.Fatalf("loaded %d dives, existed=%v, err=%v", len(loaded.Dives), existed, err)
 	}
-	secondAdded, err := syncDives(context.Background(), client, &loaded)
+	secondAdded, err := syncDives(context.Background(), client, &loaded, nil)
 	if err != nil || secondAdded != 0 {
 		t.Fatalf("second sync added %d dives: %v", secondAdded, err)
 	}

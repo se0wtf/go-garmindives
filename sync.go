@@ -34,7 +34,7 @@ type diveClient interface {
 	GetDiveDetails(context.Context, int64) (json.RawMessage, error)
 }
 
-func syncDives(ctx context.Context, client diveClient, archive *Archive) (int, error) {
+func syncDives(ctx context.Context, client diveClient, archive *Archive, reportProgress func(int, int)) (int, error) {
 	activities, err := client.Activities(ctx, garmin.ListOptions{
 		Limit: divePageSize,
 	})
@@ -45,7 +45,7 @@ func syncDives(ctx context.Context, client diveClient, archive *Archive) (int, e
 	for _, dive := range archive.Dives {
 		existing[dive.ID] = struct{}{}
 	}
-	pending := make([]DiveRecord, 0)
+	missing := make([]garmin.Activity, 0)
 	for _, activity := range activities {
 		if !isDive(activity.ActivityType) {
 			continue
@@ -53,6 +53,11 @@ func syncDives(ctx context.Context, client diveClient, archive *Archive) (int, e
 		if _, found := existing[activity.ID]; found {
 			continue
 		}
+		missing = append(missing, activity)
+		existing[activity.ID] = struct{}{}
+	}
+	pending := make([]DiveRecord, 0, len(missing))
+	for _, activity := range missing {
 		activityDetails, err := client.GetActivityDetails(ctx, activity.ID, garmin.DetailOptions{
 			MaxChartSize:    maxChartSize,
 			MaxPolylineSize: maxPolylineSize,
@@ -82,7 +87,9 @@ func syncDives(ctx context.Context, client diveClient, archive *Archive) (int, e
 			ActivityDetails: activityDocument,
 			DiveDetails:     diveDocument,
 		})
-		existing[activity.ID] = struct{}{}
+		if reportProgress != nil {
+			reportProgress(len(pending), len(missing))
+		}
 	}
 	archive.Dives = append(archive.Dives, pending...)
 	return len(pending), nil

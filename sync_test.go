@@ -60,7 +60,10 @@ func TestSyncDivesAddsOnlyMissingDives(t *testing.T) {
 	}
 	archive := newArchive()
 	archive.Dives = append(archive.Dives, DiveRecord{ID: 1})
-	added, err := syncDives(context.Background(), client, &archive)
+	var progress [][2]int
+	added, err := syncDives(context.Background(), client, &archive, func(completed, total int) {
+		progress = append(progress, [2]int{completed, total})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +76,12 @@ func TestSyncDivesAddsOnlyMissingDives(t *testing.T) {
 	if !reflect.DeepEqual(client.activityDetailCalls, []int64{2}) || !reflect.DeepEqual(client.diveDetailCalls, []int64{2}) {
 		t.Fatalf("detail calls = %v / %v", client.activityDetailCalls, client.diveDetailCalls)
 	}
-	added, err = syncDives(context.Background(), client, &archive)
+	if !reflect.DeepEqual(progress, [][2]int{{1, 1}}) {
+		t.Fatalf("progress = %v", progress)
+	}
+	added, err = syncDives(context.Background(), client, &archive, func(completed, total int) {
+		progress = append(progress, [2]int{completed, total})
+	})
 	if err != nil || added != 0 || len(archive.Dives) != 2 {
 		t.Fatalf("second sync: added=%d archive=%#v err=%v", added, archive, err)
 	}
@@ -95,7 +103,7 @@ func TestSyncDivesIsTransactional(t *testing.T) {
 		diveDetailsErr:     map[int64]error{11: wantErr},
 	}
 	archive := newArchive()
-	added, err := syncDives(context.Background(), client, &archive)
+	added, err := syncDives(context.Background(), client, &archive, nil)
 	if added != 0 || !errors.Is(err, wantErr) || len(archive.Dives) != 0 {
 		t.Fatalf("added=%d archive=%#v err=%v", added, archive, err)
 	}
@@ -105,7 +113,7 @@ func TestSyncDivesErrors(t *testing.T) {
 	wantErr := errors.New("list failed")
 	client := &fakeDiveClient{activitiesErr: wantErr}
 	archive := newArchive()
-	if _, err := syncDives(context.Background(), client, &archive); !errors.Is(err, wantErr) {
+	if _, err := syncDives(context.Background(), client, &archive, nil); !errors.Is(err, wantErr) {
 		t.Fatalf("error = %v", err)
 	}
 
@@ -116,7 +124,7 @@ func TestSyncDivesErrors(t *testing.T) {
 		activityDetailsErr: map[int64]error{},
 		diveDetailsErr:     map[int64]error{},
 	}
-	if _, err := syncDives(context.Background(), client, &archive); err == nil {
+	if _, err := syncDives(context.Background(), client, &archive, nil); err == nil {
 		t.Fatal("expected invalid JSON error")
 	}
 }

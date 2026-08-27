@@ -141,6 +141,9 @@ MFA codes are never written to disk.`)
 type clientLoader func() (diveClient, error)
 
 func syncWithAuthentication(ctx context.Context, archive *Archive, loadCached, loginFresh clientLoader, logger *charmLog.Logger) (int, error) {
+	reportProgress := func(completed, total int) {
+		logger.Info(fmt.Sprintf("synchronisation in progress... (%d/%d)", completed, total))
+	}
 	client, err := loadCached()
 	if errors.Is(err, garmin.ErrNoTokenFile) {
 		logger.Debug("token cache not found; requesting Garmin credentials")
@@ -151,7 +154,7 @@ func syncWithAuthentication(ctx context.Context, archive *Archive, loadCached, l
 	if err != nil {
 		return 0, fmt.Errorf("authenticate with Garmin: %w", err)
 	}
-	added, err := syncDives(ctx, client, archive)
+	added, err := syncDives(ctx, client, archive, reportProgress)
 	if !errors.Is(err, garmin.ErrSessionExpired) {
 		return added, err
 	}
@@ -160,5 +163,5 @@ func syncWithAuthentication(ctx context.Context, archive *Archive, loadCached, l
 	if err != nil {
 		return 0, fmt.Errorf("reauthenticate with Garmin: %w", err)
 	}
-	return syncDives(ctx, client, archive)
+	return syncDives(ctx, client, archive, reportProgress)
 }
