@@ -49,8 +49,8 @@ func (f *fakeDiveClient) GetDiveDetails(_ context.Context, id int64) (json.RawMe
 func TestSyncDivesAddsOnlyMissingDives(t *testing.T) {
 	client := &fakeDiveClient{
 		activities: []garmin.Activity{
-			{ID: 1, ActivityType: garmin.ActivityType{ID: diveTypeID, Key: "diving"}},
-			{ID: 2, Name: "New dive", ActivityType: garmin.ActivityType{Key: "single_gas_diving", ParentID: diveTypeID}},
+			{ID: 1, ActivityType: garmin.ActivityType{Key: "gauge_diving"}},
+			{ID: 2, Name: "New dive", ActivityType: garmin.ActivityType{Key: "single_gas_diving"}},
 			{ID: 3, ActivityType: garmin.ActivityType{Key: "running", ParentID: 1}},
 		},
 		activityDetails:    map[int64]json.RawMessage{2: json.RawMessage(`{"activityId":2}`)},
@@ -67,7 +67,7 @@ func TestSyncDivesAddsOnlyMissingDives(t *testing.T) {
 	if added != 1 || len(archive.Dives) != 2 || archive.Dives[1].ID != 2 {
 		t.Fatalf("added=%d archive=%#v", added, archive)
 	}
-	if client.listOptions.ActivityType != "diving" || client.listOptions.Limit != divePageSize {
+	if client.listOptions.ActivityType != "" || client.listOptions.Limit != divePageSize {
 		t.Fatalf("list options = %#v", client.listOptions)
 	}
 	if !reflect.DeepEqual(client.activityDetailCalls, []int64{2}) || !reflect.DeepEqual(client.diveDetailCalls, []int64{2}) {
@@ -110,7 +110,7 @@ func TestSyncDivesErrors(t *testing.T) {
 	}
 
 	client = &fakeDiveClient{
-		activities:         []garmin.Activity{{ID: 1, ActivityType: garmin.ActivityType{Key: "diving"}}},
+		activities:         []garmin.Activity{{ID: 1, ActivityType: garmin.ActivityType{Key: "gauge_diving"}}},
 		activityDetails:    map[int64]json.RawMessage{1: json.RawMessage(`not-json`)},
 		diveDetails:        map[int64]json.RawMessage{1: json.RawMessage(`{}`)},
 		activityDetailsErr: map[int64]error{},
@@ -126,10 +126,11 @@ func TestIsDive(t *testing.T) {
 		activityType garmin.ActivityType
 		want         bool
 	}{
-		{garmin.ActivityType{ID: diveTypeID}, true},
-		{garmin.ActivityType{ParentID: diveTypeID}, true},
-		{garmin.ActivityType{ParentKey: "DIVING"}, true},
 		{garmin.ActivityType{Key: "multi_gas_diving"}, true},
+		{garmin.ActivityType{Key: "APNEA_HUNTING"}, true},
+		{garmin.ActivityType{Key: "ccr_diving"}, true},
+		{garmin.ActivityType{Key: "resort_diving"}, true},
+		{garmin.ActivityType{Key: "generic_diving"}, false},
 		{garmin.ActivityType{Key: "running"}, false},
 	}
 	for _, test := range tests {

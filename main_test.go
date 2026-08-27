@@ -67,7 +67,7 @@ func TestRunHelp(t *testing.T) {
 
 func TestRunWithDependencies(t *testing.T) {
 	client := &fakeDiveClient{
-		activities:         []garmin.Activity{{ID: 9, ActivityType: garmin.ActivityType{Key: "diving"}}},
+		activities:         []garmin.Activity{{ID: 9, ActivityType: garmin.ActivityType{Key: "single_gas_diving"}}},
 		activityDetails:    map[int64]json.RawMessage{9: json.RawMessage(`{"activityId":9}`)},
 		diveDetails:        map[int64]json.RawMessage{9: json.RawMessage(`{"connectId":9}`)},
 		activityDetailsErr: map[int64]error{},

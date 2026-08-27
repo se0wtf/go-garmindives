@@ -13,11 +13,20 @@ import (
 )
 
 const (
-	diveTypeID      = 144
 	divePageSize    = 100
 	maxChartSize    = 2000
 	maxPolylineSize = 4000
 )
+
+var diveActivityTypes = map[string]struct{}{
+	"apnea_diving":      {},
+	"apnea_hunting":     {},
+	"ccr_diving":        {},
+	"gauge_diving":      {},
+	"multi_gas_diving":  {},
+	"resort_diving":     {},
+	"single_gas_diving": {},
+}
 
 type diveClient interface {
 	Activities(context.Context, garmin.ListOptions) ([]garmin.Activity, error)
@@ -27,8 +36,7 @@ type diveClient interface {
 
 func syncDives(ctx context.Context, client diveClient, archive *Archive) (int, error) {
 	activities, err := client.Activities(ctx, garmin.ListOptions{
-		Limit:        divePageSize,
-		ActivityType: "diving",
+		Limit: divePageSize,
 	})
 	if err != nil {
 		return 0, fmt.Errorf("list dives: %w", err)
@@ -81,12 +89,8 @@ func syncDives(ctx context.Context, client diveClient, archive *Archive) (int, e
 }
 
 func isDive(activityType garmin.ActivityType) bool {
-	if activityType.ID == diveTypeID || activityType.ParentID == diveTypeID {
-		return true
-	}
-	key := strings.ToLower(activityType.Key)
-	parentKey := strings.ToLower(activityType.ParentKey)
-	return key == "diving" || parentKey == "diving" || strings.HasSuffix(key, "_diving")
+	_, found := diveActivityTypes[strings.ToLower(activityType.Key)]
+	return found
 }
 
 func document(value any) (any, error) {
