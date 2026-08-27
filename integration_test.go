@@ -2,9 +2,13 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	garmin "github.com/se0wtf/go-garminconnect"
 )
@@ -40,5 +44,79 @@ func TestGarminDiveIntegration(t *testing.T) {
 	secondAdded, err := syncDives(context.Background(), client, &loaded, nil)
 	if err != nil || secondAdded != 0 {
 		t.Fatalf("second sync added %d dives: %v", secondAdded, err)
+	}
+}
+
+func TestPostgresStoreIntegration(t *testing.T) {
+	dsn := os.Getenv("TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("set TEST_POSTGRES_DSN to run the PostgreSQL integration test")
+	}
+	admin, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	ctx := context.Background()
+	if err := admin.PingContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	schema := fmt.Sprintf("go_garmindives_test_%d", time.Now().UnixNano())
+	if _, err := admin.ExecContext(ctx, `CREATE SCHEMA `+schema); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if _, err := admin.ExecContext(context.Background(), `DROP SCHEMA `+schema+` CASCADE`); err != nil {
+			t.Errorf("drop test schema: %v", err)
+		}
+	}()
+	parsed, err := url.Parse(dsn)
+	if err != nil || parsed.Scheme == "" {
+		t.Fatal("TEST_POSTGRES_DSN must be a PostgreSQL connection URL")
+	}
+	query := parsed.Query()
+	query.Set("search_path", schema)
+	parsed.RawQuery = query.Encode()
+	store, err := openSQLStore(ctx, outputPostgres, parsed.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveDives(ctx, []DiveRecord{testSQLDive(t, 42)}); err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	ids, err := store.DiveIDs(ctx)
+	if closeErr := store.Close(); err == nil && closeErr != nil {
+		err = closeErr
+	}
+	if err != nil || len(ids) != 1 || ids[0] != 42 {
+		t.Fatalf("PostgreSQL IDs = %v, err=%v", ids, err)
+	}
+}
+
+func TestDiveArchiveSQLIntegration(t *testing.T) {
+	archivePath := os.Getenv("TEST_DIVE_ARCHIVE")
+	if archivePath == "" {
+		t.Skip("set TEST_DIVE_ARCHIVE to validate a complete YAML archive against SQLite")
+	}
+	archive, existed, err := loadArchive(archivePath)
+	if err != nil || !existed || len(archive.Dives) == 0 {
+		t.Fatalf("load archive: dives=%d, existed=%v, err=%v", len(archive.Dives), existed, err)
+	}
+	store, err := openSQLStore(context.Background(), outputSQLite, filepath.Join(t.TempDir(), "dives.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.SaveDives(context.Background(), archive.Dives); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := store.DiveIDs(context.Background())
+	if err != nil || len(ids) != len(archive.Dives) {
+		t.Fatalf("stored IDs=%d, archive dives=%d, err=%v", len(ids), len(archive.Dives), err)
+	}
+	var samples int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM dive_samples`).Scan(&samples); err != nil || samples == 0 {
+		t.Fatalf("stored samples=%d, err=%v", samples, err)
 	}
 }

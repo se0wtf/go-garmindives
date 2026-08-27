@@ -56,8 +56,7 @@ func run(ctx context.Context, args []string, input *os.File, output io.Writer, l
 	prompt := newTerminalPrompter(input, output)
 	dependencies := appDependencies{
 		configDirectory: os.UserConfigDir,
-		loadArchive:     loadArchive,
-		saveArchive:     saveArchive,
+		openDestination: openDestination,
 		loadCached: func(path string) (diveClient, error) {
 			return garmin.NewClientFromTokenFile(path)
 		},
@@ -70,8 +69,7 @@ func run(ctx context.Context, args []string, input *os.File, output io.Writer, l
 
 type appDependencies struct {
 	configDirectory func() (string, error)
-	loadArchive     func(string) (Archive, bool, error)
-	saveArchive     func(string, Archive) error
+	openDestination func(context.Context, outputConfig) (diveDestination, error)
 	loadCached      func(string) (diveClient, error)
 	loginFresh      func(context.Context, string) (diveClient, error)
 }
@@ -84,11 +82,13 @@ func runWithDependencies(ctx context.Context, args []string, output io.Writer, l
 	flags := flag.NewFlagSet("go-garmindives", flag.ContinueOnError)
 	flags.SetOutput(output)
 	archivePath := flags.String("output", "dives.yaml", "path to the YAML dive archive")
+	outputType := flags.String("output-type", envDefault("GARMIN_OUTPUT_TYPE", outputYAML), "output type: yaml, sqlite, or postgres")
+	outputDSN := flags.String("output-dsn", strings.TrimSpace(os.Getenv("GARMIN_OUTPUT_DSN")), "SQL database path or PostgreSQL connection URL")
 	tokenPath := flags.String("token-file", filepath.Join(configDirectory, "go-garmindives", "tokens.json"), "path to the Garmin token cache")
 	flags.Usage = func() {
-		_, _ = fmt.Fprintln(output, `go-garmindives downloads every Garmin Connect dive into one YAML archive.
+		_, _ = fmt.Fprintln(output, `go-garmindives downloads every Garmin Connect dive into YAML or a SQL database.
 On later runs it reuses cached tokens and fetches only activity IDs that are
-not already present in the archive.
+not already present in the configured output.
 
 Usage:
   go-garmindives [options]
@@ -97,10 +97,12 @@ Options:`)
 		flags.PrintDefaults()
 		_, _ = fmt.Fprintln(output, `
 Environment:
-  GARMIN_EMAIL      Garmin account email; prompted when required and unset
-  GARMIN_PASSWORD   Garmin password; securely prompted when required and unset
-  GARMIN_MFA_CODE   Current one-time MFA code; prompted when Garmin requests it
-  LOG_LEVEL         Console verbosity: debug, info, warn, error, or fatal
+  GARMIN_EMAIL        Garmin account email; prompted when required and unset
+  GARMIN_PASSWORD     Garmin password; securely prompted when required and unset
+  GARMIN_MFA_CODE     Current one-time MFA code; prompted when Garmin requests it
+  GARMIN_OUTPUT_TYPE  Output type: yaml (default), sqlite, or postgres
+  GARMIN_OUTPUT_DSN   SQLite database path or PostgreSQL connection URL
+  LOG_LEVEL           Console verbosity: debug, info, warn, error, or fatal
 
 Credentials are only needed when no reusable token cache exists. Passwords and
 MFA codes are never written to disk.`)
@@ -110,11 +112,27 @@ MFA codes are never written to disk.`)
 	} else if err != nil {
 		return err
 	}
-	logger.Debug("configuration resolved", "archive", *archivePath, "token_cache", *tokenPath)
+	kind := strings.ToLower(strings.TrimSpace(*outputType))
+	endpoint := strings.TrimSpace(*outputDSN)
+	switch kind {
+	case outputYAML:
+		endpoint = *archivePath
+	case outputSQLite:
+		if endpoint == "" {
+			endpoint = "dives.db"
+		}
+	}
+	config := outputConfig{Type: kind, Endpoint: endpoint}
+	logger.Debug("configuration resolved", "output_type", config.Type, "token_cache", *tokenPath)
 
-	archive, existed, err := dependencies.loadArchive(*archivePath)
+	destination, err := dependencies.openDestination(ctx, config)
 	if err != nil {
-		return err
+		return fmt.Errorf("open %s output: %w", config.Type, err)
+	}
+	defer destination.Close()
+	archive, existed, err := destination.Load(ctx)
+	if err != nil {
+		return fmt.Errorf("load %s output: %w", config.Type, err)
 	}
 	loadCached := func() (diveClient, error) {
 		return dependencies.loadCached(*tokenPath)
@@ -122,20 +140,27 @@ MFA codes are never written to disk.`)
 	loginFresh := func() (diveClient, error) {
 		return dependencies.loginFresh(ctx, *tokenPath)
 	}
-	logger.Debug("archive loaded", "exists", existed, "dives", len(archive.Dives))
+	logger.Debug("stored dives loaded", "exists", existed, "dives", len(archive.Dives))
 	logger.Info("synchronizing Garmin dives")
 	added, err := syncWithAuthentication(ctx, &archive, loadCached, loginFresh, logger)
 	if err != nil {
 		return err
 	}
 	if added > 0 || !existed {
-		if err := dependencies.saveArchive(*archivePath, archive); err != nil {
-			return err
+		if err := destination.Save(ctx, archive, added); err != nil {
+			return fmt.Errorf("save %s output: %w", config.Type, err)
 		}
-		logger.Debug("archive saved", "path", *archivePath)
+		logger.Debug("dive output saved", "output_type", config.Type)
 	}
 	logger.Info("synchronization complete", "new_dives", added, "total_dives", len(archive.Dives))
 	return nil
+}
+
+func envDefault(name, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value
+	}
+	return fallback
 }
 
 type clientLoader func() (diveClient, error)
