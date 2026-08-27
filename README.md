@@ -27,10 +27,11 @@ Credentials can also be supplied for non-interactive use:
 GARMIN_EMAIL='you@example.com' GARMIN_PASSWORD='...' go-garmindives
 ```
 
-The password is never stored. Access and refresh tokens are cached under the
-operating system's user configuration directory with owner-only permissions.
-Later runs reuse and automatically refresh those tokens. If Garmin rejects the
-refresh token, the app asks for credentials again.
+The password is never stored. API tokens and the authenticated Garmin browser
+session needed by the Dive endpoint are cached under the operating system's
+user configuration directory with owner-only permissions. Later runs reuse the
+cached session and automatically refresh expiring API tokens. If Garmin expires
+either part of the session, the app asks for credentials and MFA again.
 
 The default archive is `dives.yaml` in the current directory. Choose other
 locations with:
