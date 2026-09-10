@@ -85,6 +85,43 @@ migration runs in a transaction. A database newer than the app is rejected
 instead of being modified. Future schema changes are added as a new numbered
 migration; existing migrations are never rewritten.
 
+## REST API
+
+The API reads directly from SQLite or PostgreSQL and does not contact Garmin or
+require Garmin credentials. Start it with the same SQL configuration used for
+synchronization:
+
+```sh
+go-garmindives serve -output-type sqlite -output-dsn /path/to/dives.db
+```
+
+It listens on `127.0.0.1:8080` by default. Change this with `-listen` or
+`GARMIN_API_ADDR`. There is intentionally no authentication yet, so only bind it
+to a trusted network. Browser access from a separately hosted JavaScript
+frontend is enabled through CORS.
+
+The versioned endpoints are:
+
+- `GET /api/v1/health`
+- `GET /api/v1/dives`
+- `GET /api/v1/dives/{id}`
+- `GET /api/v1/dives/{id}/samples`
+
+Dive lists are newest-first and accept `limit` (default 50, maximum 100), an
+opaque `cursor`, inclusive local-date filters `from` and `to` in `YYYY-MM-DD`
+format, and a case-insensitive `location` substring. For example:
+
+```text
+/api/v1/dives?from=2026-01-01&to=2026-08-31&location=noumea&limit=20
+```
+
+When more results exist, use the returned `next_cursor` unchanged in the next
+request. Sample lists use the same scheme with a default of 5,000 and maximum
+of 10,000 rows per page. The dive detail endpoint includes all three original
+Garmin JSON documents, record metadata, and alerts; the samples endpoint
+provides graph-ready elapsed time, depth, heart rate, temperature, gas, and
+decompression values.
+
 ## Development
 
 ```sh

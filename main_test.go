@@ -81,7 +81,7 @@ func TestRunHelp(t *testing.T) {
 		}
 		for _, expected := range []string{
 			"downloads every Garmin Connect dive",
-			"GARMIN_EMAIL", "GARMIN_PASSWORD", "GARMIN_MFA_CODE", "GARMIN_OUTPUT_TYPE", "GARMIN_OUTPUT_DSN", "LOG_LEVEL",
+			"GARMIN_EMAIL", "GARMIN_PASSWORD", "GARMIN_MFA_CODE", "GARMIN_OUTPUT_TYPE", "GARMIN_OUTPUT_DSN", "GARMIN_API_ADDR", "LOG_LEVEL",
 			"-output", "-output-type", "-output-dsn", "-token-file",
 		} {
 			if !strings.Contains(output.String(), expected) {

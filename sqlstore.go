@@ -13,12 +13,13 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 )
 
-const sqlSchemaVersion = 1
+const sqlSchemaVersion = 2
 
 type sqlStore struct {
 	db      *sql.DB
@@ -101,6 +102,14 @@ var migrations = []migration{{
 			data_json TEXT NOT NULL,
 			PRIMARY KEY (dive_id, alert_index)
 		)`,
+	},
+}, {
+	version: 2,
+	statements: []string{
+		`ALTER TABLE dives ADD COLUMN local_date TEXT NOT NULL DEFAULT ''`,
+		`UPDATE dives SET local_date = SUBSTR(start_time, 1, 10) WHERE start_time <> ''`,
+		`CREATE INDEX dives_local_date_start_idx ON dives (local_date DESC, start_time DESC, id DESC)`,
+		`CREATE INDEX dives_location_idx ON dives (location)`,
 	},
 }}
 
@@ -267,6 +276,7 @@ type storedDive struct {
 	ActivityType        string
 	DiveType            string
 	StartTime           string
+	LocalDate           string
 	Timezone            string
 	Location            string
 	EntryLatitude       *float64
@@ -398,6 +408,7 @@ func prepareStoredDive(record DiveRecord) (storedDive, error) {
 		ActivityJSON: activityJSON, ActivityDetailsJSON: activityDetailsJSON, DiveDetailsJSON: diveDetailsJSON,
 		RecordMetadata: details.Records.Metadata,
 	}
+	result.LocalDate = diveLocalDate(result.StartTime)
 	result.Duration = nonZeroFloat(details.TotalTime, activity.Duration)
 	result.MaxDepth = optionalFloat(details.Profile.MaxDepth)
 	result.AverageDepth = optionalFloat(details.Profile.AverageDepth)
@@ -535,16 +546,16 @@ func (s *sqlStore) SaveDives(ctx context.Context, records []DiveRecord) error {
 
 func (s *sqlStore) insertDive(ctx context.Context, tx *sql.Tx, dive storedDive) (bool, error) {
 	query := s.bind(`INSERT INTO dives (
-		id, garmin_dive_id, dive_number, name, activity_type, dive_type, start_time, timezone,
+		id, garmin_dive_id, dive_number, name, activity_type, dive_type, start_time, local_date, timezone,
 		location, entry_latitude, entry_longitude, exit_latitude, exit_longitude, notes, description, duration_seconds,
 		max_depth_meters, average_depth_meters, average_heart_rate, max_heart_rate,
 		min_temperature_celsius, average_temperature_celsius, max_temperature_celsius,
 		activity_json, activity_details_json, dive_details_json
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT (id) DO NOTHING`)
 	result, err := tx.ExecContext(ctx, query,
 		dive.ID, nullableInt64(dive.GarminDiveID), nullableInt(dive.DiveNumber), dive.Name, dive.ActivityType, dive.DiveType,
-		dive.StartTime, dive.Timezone, dive.Location, dive.EntryLatitude, dive.EntryLongitude, dive.ExitLatitude, dive.ExitLongitude,
+		dive.StartTime, dive.LocalDate, dive.Timezone, dive.Location, dive.EntryLatitude, dive.EntryLongitude, dive.ExitLatitude, dive.ExitLongitude,
 		dive.Notes, dive.Description, dive.Duration,
 		dive.MaxDepth, dive.AverageDepth, dive.AverageHeartRate, dive.MaxHeartRate,
 		dive.MinTemperature, dive.AverageTemperature, dive.MaxTemperature,
@@ -638,6 +649,17 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func diveLocalDate(startTime string) string {
+	if len(startTime) < len("2006-01-02") {
+		return ""
+	}
+	date := startTime[:len("2006-01-02")]
+	if _, err := time.Parse("2006-01-02", date); err != nil {
+		return ""
+	}
+	return date
 }
 
 func nullableInt64(value int64) any {

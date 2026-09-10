@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -68,7 +69,7 @@ func TestSQLiteStoreMigratesAndSavesDiveRows(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(ids, []int64{42}) {
 		t.Fatalf("DiveIDs() = %v, %v", ids, err)
 	}
-	for table, want := range map[string]int{"dives": 1, "dive_record_metadata": 6, "dive_samples": 2, "dive_alerts": 1, "schema_migrations": 1} {
+	for table, want := range map[string]int{"dives": 1, "dive_record_metadata": 6, "dive_samples": 2, "dive_alerts": 1, "schema_migrations": 2} {
 		var count int
 		if err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&count); err != nil || count != want {
 			t.Fatalf("%s count = %d, err=%v, want %d", table, count, err, want)
@@ -86,13 +87,13 @@ func TestSQLiteStoreMigratesAndSavesDiveRows(t *testing.T) {
 	}
 	var garminDiveID int64
 	var diveNumber int
-	var name, activityType, diveType, timezone, location, notes, description string
-	if err := store.db.QueryRowContext(ctx, `SELECT garmin_dive_id, dive_number, name, activity_type, dive_type, timezone, location, notes, description
-		FROM dives WHERE id = 42`).Scan(&garminDiveID, &diveNumber, &name, &activityType, &diveType, &timezone, &location, &notes, &description); err != nil {
+	var name, activityType, diveType, localDate, timezone, location, notes, description string
+	if err := store.db.QueryRowContext(ctx, `SELECT garmin_dive_id, dive_number, name, activity_type, dive_type, local_date, timezone, location, notes, description
+		FROM dives WHERE id = 42`).Scan(&garminDiveID, &diveNumber, &name, &activityType, &diveType, &localDate, &timezone, &location, &notes, &description); err != nil {
 		t.Fatal(err)
 	}
-	if garminDiveID != 314159 || diveNumber != 232 || name != "Lagoon" || activityType != "single_gas_diving" || diveType != "SINGLE_GAS" || timezone != "Pacific/Noumea" || location != "Noumea" || notes != "Clear water" || description != "Boat dive" {
-		t.Fatalf("dive columns = %d %d %q %q %q %q %q %q %q", garminDiveID, diveNumber, name, activityType, diveType, timezone, location, notes, description)
+	if garminDiveID != 314159 || diveNumber != 232 || name != "Lagoon" || activityType != "single_gas_diving" || diveType != "SINGLE_GAS" || localDate != "2026-08-15" || timezone != "Pacific/Noumea" || location != "Noumea" || notes != "Clear water" || description != "Boat dive" {
+		t.Fatalf("dive columns = %d %d %q %q %q %q %q %q %q %q", garminDiveID, diveNumber, name, activityType, diveType, localDate, timezone, location, notes, description)
 	}
 	info, err := os.Stat(path)
 	if err != nil || info.Mode().Perm() != 0o600 {
@@ -187,6 +188,59 @@ func TestSQLiteMigrationIsIdempotent(t *testing.T) {
 	ids, err := second.DiveIDs(context.Background())
 	if err != nil || !reflect.DeepEqual(ids, []int64{42}) {
 		t.Fatalf("reopened IDs = %v, %v", ids, err)
+	}
+}
+
+func TestSQLiteMigratesVersionOneData(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dives.db")
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`CREATE TABLE schema_migrations (
+		version INTEGER PRIMARY KEY,
+		applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`); err != nil {
+		database.Close()
+		t.Fatal(err)
+	}
+	for _, statement := range migrations[0].statements {
+		if _, err := database.Exec(statement); err != nil {
+			database.Close()
+			t.Fatal(err)
+		}
+	}
+	if _, err := database.Exec(`INSERT INTO schema_migrations (version) VALUES (1)`); err != nil {
+		database.Close()
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO dives (
+		id, name, activity_type, dive_type, start_time, timezone, location, notes, description,
+		activity_json, activity_details_json, dive_details_json
+	) VALUES (42, 'Old dive', 'diving', 'SINGLE_GAS', '2025-12-31T09:30:00+11:00',
+		'Pacific/Noumea', 'Noumea', '', '', '{}', '{}', '{}')`); err != nil {
+		database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := openSQLStore(context.Background(), outputSQLite, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var localDate string
+	if err := store.db.QueryRow(`SELECT local_date FROM dives WHERE id = 42`).Scan(&localDate); err != nil {
+		t.Fatal(err)
+	}
+	if localDate != "2025-12-31" {
+		t.Fatalf("migrated local date = %q", localDate)
+	}
+	var version int
+	if err := store.db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil || version != sqlSchemaVersion {
+		t.Fatalf("schema version = %d, err = %v", version, err)
 	}
 }
 

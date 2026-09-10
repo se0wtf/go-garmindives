@@ -86,11 +86,23 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	ids, err := store.DiveIDs(ctx)
+	dives, hasMore, listErr := store.ListDives(ctx, diveListOptions{Limit: 10, From: "2026-08-01", To: "2026-08-31", Location: "noumea"})
+	detail, detailErr := store.Dive(ctx, 42)
+	samples, samplesHaveMore, samplesErr := store.DiveSamples(ctx, 42, -1, 10)
 	if closeErr := store.Close(); err == nil && closeErr != nil {
 		err = closeErr
 	}
 	if err != nil || len(ids) != 1 || ids[0] != 42 {
 		t.Fatalf("PostgreSQL IDs = %v, err=%v", ids, err)
+	}
+	if listErr != nil || hasMore || len(dives) != 1 || dives[0].ID != 42 {
+		t.Fatalf("PostgreSQL ListDives = %#v, hasMore=%v, err=%v", dives, hasMore, listErr)
+	}
+	if detailErr != nil || detail.Dive.ID != 42 || len(detail.RecordMetadata) == 0 {
+		t.Fatalf("PostgreSQL Dive = %#v, err=%v", detail, detailErr)
+	}
+	if samplesErr != nil || samplesHaveMore || len(samples) != 2 {
+		t.Fatalf("PostgreSQL DiveSamples = %#v, hasMore=%v, err=%v", samples, samplesHaveMore, samplesErr)
 	}
 }
 

@@ -53,6 +53,12 @@ func newAppLogger(output io.Writer, configuredLevel string) (*charmLog.Logger, e
 }
 
 func run(ctx context.Context, args []string, input *os.File, output io.Writer, logger *charmLog.Logger) error {
+	if len(args) != 0 && args[0] == "serve" {
+		return runServe(ctx, args[1:], output, logger)
+	}
+	if len(args) != 0 && args[0] == "sync" {
+		args = args[1:]
+	}
 	prompt := newTerminalPrompter(input, output)
 	dependencies := appDependencies{
 		configDirectory: os.UserConfigDir,
@@ -91,7 +97,12 @@ On later runs it reuses cached tokens and fetches only activity IDs that are
 not already present in the configured output.
 
 Usage:
-  go-garmindives [options]
+  go-garmindives [sync] [options]
+  go-garmindives serve [options]
+
+Commands:
+  sync   Download missing Garmin dives (default)
+  serve  Serve stored SQL dives over a REST API
 
 Options:`)
 		flags.PrintDefaults()
@@ -102,6 +113,7 @@ Environment:
   GARMIN_MFA_CODE     Current one-time MFA code; prompted when Garmin requests it
   GARMIN_OUTPUT_TYPE  Output type: yaml (default), sqlite, or postgres
   GARMIN_OUTPUT_DSN   SQLite database path or PostgreSQL connection URL
+  GARMIN_API_ADDR     REST API listen address (default 127.0.0.1:8080)
   LOG_LEVEL           Console verbosity: debug, info, warn, error, or fatal
 
 Credentials are only needed when no reusable token cache exists. Passwords and
@@ -154,6 +166,55 @@ MFA codes are never written to disk.`)
 	}
 	logger.Info("synchronization complete", "new_dives", added, "total_dives", len(archive.Dives))
 	return nil
+}
+
+type openSQLStoreFunc func(context.Context, string, string) (*sqlStore, error)
+type serveAPIFunc func(context.Context, string, *sqlStore, *charmLog.Logger) error
+
+func runServe(ctx context.Context, args []string, output io.Writer, logger *charmLog.Logger) error {
+	return runServeWithDependencies(ctx, args, output, logger, openSQLStore, serveAPI)
+}
+
+func runServeWithDependencies(ctx context.Context, args []string, output io.Writer, logger *charmLog.Logger, openStore openSQLStoreFunc, serve serveAPIFunc) error {
+	flags := flag.NewFlagSet("go-garmindives serve", flag.ContinueOnError)
+	flags.SetOutput(output)
+	outputType := flags.String("output-type", envDefault("GARMIN_OUTPUT_TYPE", outputSQLite), "SQL output type: sqlite or postgres")
+	outputDSN := flags.String("output-dsn", strings.TrimSpace(os.Getenv("GARMIN_OUTPUT_DSN")), "SQLite database path or PostgreSQL connection URL")
+	address := flags.String("listen", envDefault("GARMIN_API_ADDR", "127.0.0.1:8080"), "REST API listen address")
+	flags.Usage = func() {
+		_, _ = fmt.Fprintln(output, `Serve synchronized dives from SQLite or PostgreSQL.
+
+Usage:
+  go-garmindives serve [options]
+
+Options:`)
+		flags.PrintDefaults()
+		_, _ = fmt.Fprintln(output, `
+Environment:
+  GARMIN_OUTPUT_TYPE  SQL output type: sqlite (default) or postgres
+  GARMIN_OUTPUT_DSN   SQLite database path or PostgreSQL connection URL
+  GARMIN_API_ADDR     Listen address (default 127.0.0.1:8080)
+  LOG_LEVEL           Console verbosity: debug, info, warn, error, or fatal`)
+	}
+	if err := flags.Parse(args); errors.Is(err, flag.ErrHelp) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	kind := strings.ToLower(strings.TrimSpace(*outputType))
+	if kind != outputSQLite && kind != outputPostgres {
+		return fmt.Errorf("REST API requires sqlite or postgres output, got %q", kind)
+	}
+	endpoint := strings.TrimSpace(*outputDSN)
+	if kind == outputSQLite && endpoint == "" {
+		endpoint = "dives.db"
+	}
+	store, err := openStore(ctx, kind, endpoint)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	return serve(ctx, strings.TrimSpace(*address), store, logger)
 }
 
 func envDefault(name, fallback string) string {
