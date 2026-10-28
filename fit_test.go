@@ -338,7 +338,7 @@ func TestFITBackfillThroughAppDestinations(t *testing.T) {
 				openDestination: openDestination,
 				loadCached:      func(string) (diveClient, error) { return client, nil },
 			}
-			args := []string{"-output", path}
+			args := []string{"-output-type", outputYAML, "-output", path}
 			if kind == outputSQLite {
 				args = []string{"-output-type", kind, "-output-dsn", path}
 			}

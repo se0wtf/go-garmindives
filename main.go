@@ -98,8 +98,8 @@ func runWithDependencies(ctx context.Context, args []string, output io.Writer, l
 	}
 	flags := flag.NewFlagSet("go-garmindives", flag.ContinueOnError)
 	flags.SetOutput(output)
-	archivePath := flags.String("output", "dives.yaml", "path to the YAML dive archive")
-	outputType := flags.String("output-type", envDefault("GARMIN_OUTPUT_TYPE", outputYAML), "output type: yaml, sqlite, or postgres")
+	archivePath := flags.String("output", "dives.yaml", "path to the YAML dive archive (requires -output-type yaml)")
+	outputType := flags.String("output-type", envDefault("GARMIN_OUTPUT_TYPE", outputSQLite), "output type: sqlite, yaml, or postgres")
 	outputDSN := flags.String("output-dsn", strings.TrimSpace(os.Getenv("GARMIN_OUTPUT_DSN")), "SQL database path or PostgreSQL connection URL")
 	tokenFile := "tokens.json"
 	if dependencies.personalAPIKey != "" {
@@ -108,6 +108,7 @@ func runWithDependencies(ctx context.Context, args []string, output io.Writer, l
 	tokenPath := flags.String("token-file", filepath.Join(configDirectory, "go-garmindives", tokenFile), "path to the Garmin token cache")
 	flags.Usage = func() {
 		_, _ = fmt.Fprintln(output, `go-garmindives downloads every Garmin Connect dive into YAML or a SQL database.
+SQLite output defaults to dives.db in the current directory.
 Later runs download new dives and add FIT data to dives that do not have it yet.
 
 Usage:
@@ -127,8 +128,8 @@ Environment:
   GARMIN_EMAIL             Garmin account email; prompted when required and unset
   GARMIN_PASSWORD          Garmin password; securely prompted when required and unset
   GARMIN_MFA_CODE          Current one-time MFA code; prompted when Garmin requests it
-  GARMIN_OUTPUT_TYPE       Output type: yaml (default), sqlite, or postgres
-  GARMIN_OUTPUT_DSN        SQLite database path or PostgreSQL connection URL
+  GARMIN_OUTPUT_TYPE       Output type: sqlite (default), yaml, or postgres
+  GARMIN_OUTPUT_DSN        SQLite path (default dives.db) or PostgreSQL connection URL
   GARMIN_API_ADDR          REST API listen address (default 127.0.0.1:8080)
   LOG_LEVEL                Console verbosity: debug, info, warn, error, or fatal
 

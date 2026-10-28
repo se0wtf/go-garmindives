@@ -82,21 +82,30 @@ system's user configuration directory with owner-only permissions. Later runs
 reuse the cached session and automatically refresh expiring API tokens. If Garmin expires
 either part of the session, the app asks for credentials and MFA again.
 
-The default archive is `dives.yaml` in the current directory. Choose other
-locations with:
+SQLite is the default output. Running `go-garmindives` creates or updates
+`dives.db` in the current directory, with owner-only permissions. Set another
+database path with:
 
 ```sh
-go-garmindives -output /path/to/dives.yaml -token-file /path/to/tokens.json
+go-garmindives -output-dsn /path/to/dives.db
 ```
 
-Select SQLite with environment variables:
+The database path can also be configured through the environment:
 
 ```sh
-GARMIN_OUTPUT_TYPE=sqlite GARMIN_OUTPUT_DSN=/path/to/dives.db go-garmindives
+GARMIN_OUTPUT_DSN=/path/to/dives.db go-garmindives
 ```
 
-The SQLite database is created with owner-only permissions. If
-`GARMIN_OUTPUT_DSN` is omitted, its default path is `dives.db`.
+Select YAML explicitly to create or update `dives.yaml`, or choose another
+archive and token cache path:
+
+```sh
+go-garmindives -output-type yaml
+go-garmindives -output-type yaml -output /path/to/dives.yaml -token-file /path/to/tokens.json
+```
+
+`GARMIN_OUTPUT_TYPE=yaml` also selects YAML. The `-output` flag applies only to
+YAML; SQLite and PostgreSQL use `-output-dsn` or `GARMIN_OUTPUT_DSN`.
 
 For PostgreSQL, provide a standard connection URL:
 

@@ -126,6 +126,7 @@ func TestRunUsesSQLConfigurationFromEnvironment(t *testing.T) {
 }
 
 func TestYAMLOutputIgnoresSQLDSN(t *testing.T) {
+	t.Setenv("GARMIN_OUTPUT_TYPE", outputPostgres)
 	t.Setenv("GARMIN_OUTPUT_DSN", "postgres://must-not-be-used")
 	var config outputConfig
 	destination := &fakeDestination{archive: newArchive(), existed: true}
@@ -140,7 +141,7 @@ func TestYAMLOutputIgnoresSQLDSN(t *testing.T) {
 		},
 		loginFresh: func(context.Context, string) (diveClient, error) { return nil, errors.New("unexpected login") },
 	}
-	if err := runWithDependencies(context.Background(), []string{"-output", "custom.yaml"}, &bytes.Buffer{}, testLogger(t), dependencies); err != nil {
+	if err := runWithDependencies(context.Background(), []string{"-output-type", outputYAML, "-output", "custom.yaml"}, &bytes.Buffer{}, testLogger(t), dependencies); err != nil {
 		t.Fatal(err)
 	}
 	if config != (outputConfig{Type: outputYAML, Endpoint: "custom.yaml"}) {
@@ -149,6 +150,7 @@ func TestYAMLOutputIgnoresSQLDSN(t *testing.T) {
 }
 
 func TestRunWithSQLiteOutputIsIncremental(t *testing.T) {
+	t.Setenv("GARMIN_OUTPUT_TYPE", "")
 	fixture := testSQLDive(t, 42)
 	activityDetails, err := json.Marshal(fixture.ActivityDetails)
 	if err != nil {
@@ -172,7 +174,7 @@ func TestRunWithSQLiteOutputIsIncremental(t *testing.T) {
 		loginFresh:      func(context.Context, string) (diveClient, error) { return nil, errors.New("unexpected login") },
 	}
 	path := filepath.Join(t.TempDir(), "dives.db")
-	args := []string{"-output-type", outputSQLite, "-output-dsn", path}
+	args := []string{"-output-dsn", path}
 	for run := 0; run < 2; run++ {
 		if err := runWithDependencies(context.Background(), args, &bytes.Buffer{}, testLogger(t), dependencies); err != nil {
 			t.Fatal(err)
@@ -198,7 +200,9 @@ func TestRunWithSQLiteOutputIsIncremental(t *testing.T) {
 	}
 }
 
-func TestRunWithDependencies(t *testing.T) {
+func TestRunDefaultsToSQLite(t *testing.T) {
+	t.Setenv("GARMIN_OUTPUT_TYPE", "")
+	t.Setenv("GARMIN_OUTPUT_DSN", "")
 	client := &fakeDiveClient{
 		activities:         []garmin.Activity{{ID: 9, ActivityType: garmin.ActivityType{Key: "single_gas_diving"}}},
 		activityDetails:    map[int64]json.RawMessage{9: json.RawMessage(`{"activityId":9}`)},
@@ -227,11 +231,11 @@ func TestRunWithDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = runWithDependencies(context.Background(), []string{"-output", "export.yaml"}, &output, logger, dependencies)
+	err = runWithDependencies(context.Background(), nil, &output, logger, dependencies)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config != (outputConfig{Type: outputYAML, Endpoint: "export.yaml"}) || loadedTokenPath != "/config/go-garmindives/tokens.json" {
+	if config != (outputConfig{Type: outputSQLite, Endpoint: "dives.db"}) || loadedTokenPath != "/config/go-garmindives/tokens.json" {
 		t.Fatalf("configuration = %#v / %q", config, loadedTokenPath)
 	}
 	if len(destination.saved.Dives) != 1 || destination.added != 1 || !destination.closed {

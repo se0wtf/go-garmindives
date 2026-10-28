@@ -95,7 +95,7 @@ func TestPersonalAPISync(t *testing.T) {
 				t.Fatal(err)
 			}
 			outputPath := filepath.Join(directory, "dives.yaml")
-			args := []string{"-output", outputPath}
+			args := []string{"-output-type", outputYAML, "-output", outputPath}
 			if kind == outputSQLite {
 				outputPath = filepath.Join(directory, "dives.db")
 				args = []string{"-output-type", kind, "-output-dsn", outputPath}
