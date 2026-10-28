@@ -61,14 +61,13 @@ type sqlDestination struct {
 }
 
 func (d *sqlDestination) Load(ctx context.Context) (Archive, bool, error) {
-	ids, err := d.store.DiveIDs(ctx)
+	dives, err := d.store.DiveSyncState(ctx)
 	if err != nil {
 		return Archive{}, true, err
 	}
 	archive := newArchive()
-	archive.Dives = make([]DiveRecord, 0, len(ids))
-	for _, id := range ids {
-		archive.Dives = append(archive.Dives, DiveRecord{ID: id})
+	if dives != nil {
+		archive.Dives = dives
 	}
 	return archive, true, nil
 }

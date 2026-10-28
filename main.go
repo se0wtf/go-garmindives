@@ -59,25 +59,36 @@ func run(ctx context.Context, args []string, input *os.File, output io.Writer, l
 	if len(args) != 0 && args[0] == "sync" {
 		args = args[1:]
 	}
+	httpClient, err := newGarminHTTPClientFromEnvironment(logger)
+	if err != nil {
+		return err
+	}
+	defer httpClient.CloseIdleConnections()
 	prompt := newTerminalPrompter(input, output)
 	dependencies := appDependencies{
+		personalAPIKey:  strings.TrimSpace(os.Getenv("GARMIN_PERSONAL_API_KEY")),
 		configDirectory: os.UserConfigDir,
 		openDestination: openDestination,
 		loadCached: func(path string) (diveClient, error) {
-			return garmin.NewClientFromTokenFile(path)
+			return garmin.NewClientFromTokenFile(path, garmin.WithHTTPClient(httpClient))
 		},
 		loginFresh: func(ctx context.Context, path string) (diveClient, error) {
-			return login(ctx, path, prompt)
+			return login(ctx, path, prompt, garmin.WithHTTPClient(httpClient))
+		},
+		newPersonal: func(key, path string) (diveClient, error) {
+			return garmin.NewPersonalClient(key, garmin.WithTokenFile(path), garmin.WithHTTPClient(httpClient))
 		},
 	}
 	return runWithDependencies(ctx, args, output, logger, dependencies)
 }
 
 type appDependencies struct {
+	personalAPIKey  string
 	configDirectory func() (string, error)
 	openDestination func(context.Context, outputConfig) (diveDestination, error)
 	loadCached      func(string) (diveClient, error)
 	loginFresh      func(context.Context, string) (diveClient, error)
+	newPersonal     func(string, string) (diveClient, error)
 }
 
 func runWithDependencies(ctx context.Context, args []string, output io.Writer, logger *charmLog.Logger, dependencies appDependencies) error {
@@ -90,11 +101,14 @@ func runWithDependencies(ctx context.Context, args []string, output io.Writer, l
 	archivePath := flags.String("output", "dives.yaml", "path to the YAML dive archive")
 	outputType := flags.String("output-type", envDefault("GARMIN_OUTPUT_TYPE", outputYAML), "output type: yaml, sqlite, or postgres")
 	outputDSN := flags.String("output-dsn", strings.TrimSpace(os.Getenv("GARMIN_OUTPUT_DSN")), "SQL database path or PostgreSQL connection URL")
-	tokenPath := flags.String("token-file", filepath.Join(configDirectory, "go-garmindives", "tokens.json"), "path to the Garmin token cache")
+	tokenFile := "tokens.json"
+	if dependencies.personalAPIKey != "" {
+		tokenFile = "personal-tokens.json"
+	}
+	tokenPath := flags.String("token-file", filepath.Join(configDirectory, "go-garmindives", tokenFile), "path to the Garmin token cache")
 	flags.Usage = func() {
 		_, _ = fmt.Fprintln(output, `go-garmindives downloads every Garmin Connect dive into YAML or a SQL database.
-On later runs it reuses cached tokens and fetches only activity IDs that are
-not already present in the configured output.
+Later runs download new dives and add FIT data to dives that do not have it yet.
 
 Usage:
   go-garmindives [sync] [options]
@@ -108,16 +122,19 @@ Options:`)
 		flags.PrintDefaults()
 		_, _ = fmt.Fprintln(output, `
 Environment:
-  GARMIN_EMAIL        Garmin account email; prompted when required and unset
-  GARMIN_PASSWORD     Garmin password; securely prompted when required and unset
-  GARMIN_MFA_CODE     Current one-time MFA code; prompted when Garmin requests it
-  GARMIN_OUTPUT_TYPE  Output type: yaml (default), sqlite, or postgres
-  GARMIN_OUTPUT_DSN   SQLite database path or PostgreSQL connection URL
-  GARMIN_API_ADDR     REST API listen address (default 127.0.0.1:8080)
-  LOG_LEVEL           Console verbosity: debug, info, warn, error, or fatal
+  GARMIN_PERSONAL_API_KEY  Garmin Personal API key; selects the official API
+  GARMIN_REQUEST_INTERVAL  Minimum delay between Garmin requests (default 2s)
+  GARMIN_EMAIL             Garmin account email; prompted when required and unset
+  GARMIN_PASSWORD          Garmin password; securely prompted when required and unset
+  GARMIN_MFA_CODE          Current one-time MFA code; prompted when Garmin requests it
+  GARMIN_OUTPUT_TYPE       Output type: yaml (default), sqlite, or postgres
+  GARMIN_OUTPUT_DSN        SQLite database path or PostgreSQL connection URL
+  GARMIN_API_ADDR          REST API listen address (default 127.0.0.1:8080)
+  LOG_LEVEL                Console verbosity: debug, info, warn, error, or fatal
 
-Credentials are only needed when no reusable token cache exists. Passwords and
-MFA codes are never written to disk.`)
+The Personal API key is exchanged for a token each run and is never stored.
+Without a key, a cached session or the legacy email/password login is used.
+Passwords and MFA codes are never written to disk.`)
 	}
 	if err := flags.Parse(args); errors.Is(err, flag.ErrHelp) {
 		return nil
@@ -146,11 +163,20 @@ MFA codes are never written to disk.`)
 	if err != nil {
 		return fmt.Errorf("load %s output: %w", config.Type, err)
 	}
-	loadCached := func() (diveClient, error) {
+	var loadCached clientLoader = func() (diveClient, error) {
 		return dependencies.loadCached(*tokenPath)
 	}
-	loginFresh := func() (diveClient, error) {
+	var loginFresh clientLoader = func() (diveClient, error) {
 		return dependencies.loginFresh(ctx, *tokenPath)
+	}
+	if dependencies.personalAPIKey != "" {
+		logger.Debug("using Garmin Personal API")
+		loadCached = func() (diveClient, error) {
+			return dependencies.newPersonal(dependencies.personalAPIKey, *tokenPath)
+		}
+		// The library renews tokens using the key. A rejected key must not
+		// trigger another exchange or a legacy credential prompt.
+		loginFresh = nil
 	}
 	logger.Debug("stored dives loaded", "exists", existed, "dives", len(archive.Dives))
 	logger.Info("synchronizing Garmin dives")
@@ -164,7 +190,7 @@ MFA codes are never written to disk.`)
 		}
 		logger.Debug("dive output saved", "output_type", config.Type)
 	}
-	logger.Info("synchronization complete", "new_dives", added, "total_dives", len(archive.Dives))
+	logger.Info("synchronization complete", "downloaded_dives", added, "total_dives", len(archive.Dives))
 	return nil
 }
 
@@ -231,17 +257,17 @@ func syncWithAuthentication(ctx context.Context, archive *Archive, loadCached, l
 		logger.Info(fmt.Sprintf("synchronisation in progress... (%d/%d)", completed, total))
 	}
 	client, err := loadCached()
-	if errors.Is(err, garmin.ErrNoTokenFile) {
+	if errors.Is(err, garmin.ErrNoTokenFile) && loginFresh != nil {
 		logger.Debug("token cache not found; requesting Garmin credentials")
 		client, err = loginFresh()
 	} else if err == nil {
-		logger.Debug("using cached Garmin session")
+		logger.Debug("Garmin client ready")
 	}
 	if err != nil {
 		return 0, fmt.Errorf("authenticate with Garmin: %w", err)
 	}
 	added, err := syncDives(ctx, client, archive, reportProgress)
-	if !errors.Is(err, garmin.ErrSessionExpired) {
+	if !errors.Is(err, garmin.ErrSessionExpired) || loginFresh == nil {
 		return added, err
 	}
 	logger.Info("cached Garmin session expired; requesting credentials")

@@ -34,6 +34,10 @@ type diveClient interface {
 	GetDiveDetails(context.Context, int64) (json.RawMessage, error)
 }
 
+type activityDownloader interface {
+	DownloadActivity(context.Context, int64, garmin.DownloadFormat) ([]byte, error)
+}
+
 func syncDives(ctx context.Context, client diveClient, archive *Archive, reportProgress func(int, int)) (int, error) {
 	activities, err := client.Activities(ctx, garmin.ListOptions{
 		Limit: divePageSize,
@@ -41,28 +45,58 @@ func syncDives(ctx context.Context, client diveClient, archive *Archive, reportP
 	if err != nil {
 		return 0, fmt.Errorf("list dives: %w", err)
 	}
-	existing := make(map[int64]struct{}, len(archive.Dives))
+	downloader, canDownload := client.(activityDownloader)
+	existing := make(map[int64]DiveRecord, len(archive.Dives))
 	for _, dive := range archive.Dives {
-		existing[dive.ID] = struct{}{}
+		existing[dive.ID] = dive
 	}
 	missing := make([]garmin.Activity, 0)
+	seen := make(map[int64]bool)
 	for _, activity := range activities {
 		if !isDive(activity.ActivityType) {
 			continue
 		}
-		if _, found := existing[activity.ID]; found {
+		if seen[activity.ID] {
+			continue
+		}
+		seen[activity.ID] = true
+		if stored, found := existing[activity.ID]; found && (!canDownload || stored.FIT != nil || stored.fitComplete) {
 			continue
 		}
 		missing = append(missing, activity)
-		existing[activity.ID] = struct{}{}
 	}
 	pending := make([]DiveRecord, 0, len(missing))
 	for _, activity := range missing {
+		var fit *fitDocument
+		if canDownload {
+			body, err := downloader.DownloadActivity(ctx, activity.ID, garmin.Original)
+			if err != nil {
+				return 0, fmt.Errorf("download original FIT for dive %d: %w", activity.ID, err)
+			}
+			fit, err = decodeFITDownload(ctx, body)
+			if err != nil {
+				return 0, fmt.Errorf("decode original FIT for dive %d: %w", activity.ID, err)
+			}
+		}
+		if stored, found := existing[activity.ID]; found {
+			stored.FIT = fit
+			pending = append(pending, stored)
+			if reportProgress != nil {
+				reportProgress(len(pending), len(missing))
+			}
+			continue
+		}
 		activityDetails, err := client.GetActivityDetails(ctx, activity.ID, garmin.DetailOptions{
 			MaxChartSize:    maxChartSize,
 			MaxPolylineSize: maxPolylineSize,
 		})
-		if err != nil {
+		if errors.Is(err, garmin.ErrUnsupportedOperation) {
+			// The Personal API supplies profile samples through the FIT file.
+			if !canDownload {
+				return 0, fmt.Errorf("get profile for dive %d: %w", activity.ID, err)
+			}
+			activityDetails = json.RawMessage("null")
+		} else if err != nil {
 			return 0, fmt.Errorf("get activity details for dive %d: %w", activity.ID, err)
 		}
 		diveDetails, err := client.GetDiveDetails(ctx, activity.ID)
@@ -86,12 +120,25 @@ func syncDives(ctx context.Context, client diveClient, archive *Archive, reportP
 			Activity:        summaryDocument,
 			ActivityDetails: activityDocument,
 			DiveDetails:     diveDocument,
+			FIT:             fit,
 		})
 		if reportProgress != nil {
 			reportProgress(len(pending), len(missing))
 		}
 	}
-	archive.Dives = append(archive.Dives, pending...)
+	// Commit changes only after every download and decode succeeds. Updated
+	// records occupy the tail, which SQL destinations save in one transaction.
+	updated := make(map[int64]bool, len(pending))
+	for _, record := range pending {
+		updated[record.ID] = true
+	}
+	unchanged := make([]DiveRecord, 0, len(archive.Dives)+len(pending))
+	for _, record := range archive.Dives {
+		if !updated[record.ID] {
+			unchanged = append(unchanged, record)
+		}
+	}
+	archive.Dives = append(unchanged, pending...)
 	return len(pending), nil
 }
 

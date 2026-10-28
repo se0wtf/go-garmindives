@@ -19,7 +19,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const sqlSchemaVersion = 2
+const sqlSchemaVersion = 4
 
 type sqlStore struct {
 	db      *sql.DB
@@ -30,6 +30,7 @@ type sqlStore struct {
 type migration struct {
 	version    int
 	statements []string
+	run        func(context.Context, *sqlStore, *sql.Tx) error
 }
 
 var migrations = []migration{{
@@ -111,6 +112,14 @@ var migrations = []migration{{
 		`CREATE INDEX dives_local_date_start_idx ON dives (local_date DESC, start_time DESC, id DESC)`,
 		`CREATE INDEX dives_location_idx ON dives (location)`,
 	},
+}, {
+	version: 3,
+	statements: []string{
+		`ALTER TABLE dives ADD COLUMN fit_json TEXT NOT NULL DEFAULT 'null'`,
+	},
+}, {
+	version: 4,
+	run:     migrateFITFiles,
 }}
 
 func openSQLStore(ctx context.Context, dialect, endpoint string) (*sqlStore, error) {
@@ -219,6 +228,12 @@ func (s *sqlStore) migrate(ctx context.Context) error {
 				return fmt.Errorf("apply schema migration %d: %w", migration.version, err)
 			}
 		}
+		if migration.run != nil {
+			if err := migration.run(ctx, s, tx); err != nil {
+				tx.Rollback()
+				return fmt.Errorf("apply schema migration %d: %w", migration.version, err)
+			}
+		}
 		if _, err := tx.ExecContext(ctx, s.bind(`INSERT INTO schema_migrations (version) VALUES (?)`), migration.version); err != nil {
 			tx.Rollback()
 			return fmt.Errorf("record schema migration %d: %w", migration.version, err)
@@ -268,6 +283,24 @@ func (s *sqlStore) DiveIDs(ctx context.Context) ([]int64, error) {
 	return ids, nil
 }
 
+func (s *sqlStore) DiveSyncState(ctx context.Context) ([]DiveRecord, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, (fit_json <> 'null' OR EXISTS
+		(SELECT 1 FROM dive_fit_files WHERE dive_id = dives.id)) FROM dives ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("list stored FIT status: %w", err)
+	}
+	defer rows.Close()
+	var result []DiveRecord
+	for rows.Next() {
+		var record DiveRecord
+		if err := rows.Scan(&record.ID, &record.fitComplete); err != nil {
+			return nil, fmt.Errorf("read stored FIT status: %w", err)
+		}
+		result = append(result, record)
+	}
+	return result, rows.Err()
+}
+
 type storedDive struct {
 	ID                  int64
 	GarminDiveID        int64
@@ -296,6 +329,8 @@ type storedDive struct {
 	ActivityJSON        []byte
 	ActivityDetailsJSON []byte
 	DiveDetailsJSON     []byte
+	FITJSON             []byte
+	FITFiles            []storedFITFile
 	RecordMetadata      []recordMetadata
 	Samples             []diveSample
 	Alerts              []diveAlert
@@ -377,6 +412,37 @@ type activityDocument struct {
 	} `json:"activityType"`
 }
 
+// Personal API activity summaries use meters and seconds. Pointers preserve
+// the distinction between a missing measurement and a recorded zero.
+type personalDiveDocument struct {
+	ID           int64  `json:"activityId"`
+	Name         string `json:"activityName"`
+	Description  string `json:"description"`
+	LocationName string `json:"locationName"`
+	ActivityType struct {
+		Key string `json:"typeKey"`
+	} `json:"activityTypeDTO"`
+	Timezone struct {
+		Key      string `json:"unitKey"`
+		Timezone string `json:"timeZone"`
+	} `json:"timeZoneUnitDTO"`
+	Summary struct {
+		StartTime          string   `json:"startTimeLocal"`
+		Duration           *float64 `json:"duration"`
+		MaxDepth           *float64 `json:"maxDepth"`
+		AverageDepth       *float64 `json:"averageDepth"`
+		AverageHR          *float64 `json:"averageHR"`
+		MaxHR              *float64 `json:"maxHR"`
+		MinTemperature     *float64 `json:"minTemperature"`
+		AverageTemperature *float64 `json:"averageTemperature"`
+		MaxTemperature     *float64 `json:"maxTemperature"`
+		StartLatitude      *float64 `json:"startLatitude"`
+		StartLongitude     *float64 `json:"startLongitude"`
+		EndLatitude        *float64 `json:"endLatitude"`
+		EndLongitude       *float64 `json:"endLongitude"`
+	} `json:"summaryDTO"`
+}
+
 func prepareStoredDive(record DiveRecord) (storedDive, error) {
 	activityJSON, err := json.Marshal(record.Activity)
 	if err != nil {
@@ -408,6 +474,28 @@ func prepareStoredDive(record DiveRecord) (storedDive, error) {
 		ActivityJSON: activityJSON, ActivityDetailsJSON: activityDetailsJSON, DiveDetailsJSON: diveDetailsJSON,
 		RecordMetadata: details.Records.Metadata,
 	}
+	var personal personalDiveDocument
+	if err := json.Unmarshal(diveDetailsJSON, &personal); err != nil {
+		return storedDive{}, fmt.Errorf("decode Personal API dive details: %w", err)
+	}
+	if personal.ID > 0 {
+		result.Name = firstNonEmpty(personal.Name, activity.Name)
+		result.Description = firstNonEmpty(personal.Description, activity.Description)
+		result.ActivityType = firstNonEmpty(personal.ActivityType.Key, activity.ActivityType.Key)
+		result.StartTime = firstNonEmpty(personal.Summary.StartTime, activity.StartTime)
+		result.LocalDate = diveLocalDate(result.StartTime)
+		result.Timezone = firstNonEmpty(personal.Timezone.Timezone, personal.Timezone.Key)
+		result.Location = personal.LocationName
+		result.EntryLatitude, result.EntryLongitude = personal.Summary.StartLatitude, personal.Summary.StartLongitude
+		result.ExitLatitude, result.ExitLongitude = personal.Summary.EndLatitude, personal.Summary.EndLongitude
+		result.Duration = personal.Summary.Duration
+		result.MaxDepth, result.AverageDepth = personal.Summary.MaxDepth, personal.Summary.AverageDepth
+		result.AverageHeartRate, result.MaxHeartRate = personal.Summary.AverageHR, personal.Summary.MaxHR
+		result.MinTemperature = personal.Summary.MinTemperature
+		result.AverageTemperature = personal.Summary.AverageTemperature
+		result.MaxTemperature = personal.Summary.MaxTemperature
+		return withFITData(result, record.FIT)
+	}
 	result.LocalDate = diveLocalDate(result.StartTime)
 	result.Duration = nonZeroFloat(details.TotalTime, activity.Duration)
 	result.MaxDepth = optionalFloat(details.Profile.MaxDepth)
@@ -436,7 +524,7 @@ func prepareStoredDive(record DiveRecord) (storedDive, error) {
 		}
 		result.Alerts = append(result.Alerts, stored)
 	}
-	return result, nil
+	return withFITData(result, record.FIT)
 }
 
 var sampleKeys = []string{
@@ -532,6 +620,11 @@ func (s *sqlStore) SaveDives(ctx context.Context, records []DiveRecord) error {
 			return err
 		}
 		if !inserted {
+			if record.FIT != nil {
+				if err := s.enrichDiveFIT(ctx, tx, dive); err != nil {
+					return err
+				}
+			}
 			continue
 		}
 		if err := s.insertDiveChildren(ctx, tx, dive); err != nil {
@@ -550,8 +643,8 @@ func (s *sqlStore) insertDive(ctx context.Context, tx *sql.Tx, dive storedDive) 
 		location, entry_latitude, entry_longitude, exit_latitude, exit_longitude, notes, description, duration_seconds,
 		max_depth_meters, average_depth_meters, average_heart_rate, max_heart_rate,
 		min_temperature_celsius, average_temperature_celsius, max_temperature_celsius,
-		activity_json, activity_details_json, dive_details_json
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		activity_json, activity_details_json, dive_details_json, fit_json
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT (id) DO NOTHING`)
 	result, err := tx.ExecContext(ctx, query,
 		dive.ID, nullableInt64(dive.GarminDiveID), nullableInt(dive.DiveNumber), dive.Name, dive.ActivityType, dive.DiveType,
@@ -559,7 +652,7 @@ func (s *sqlStore) insertDive(ctx context.Context, tx *sql.Tx, dive storedDive) 
 		dive.Notes, dive.Description, dive.Duration,
 		dive.MaxDepth, dive.AverageDepth, dive.AverageHeartRate, dive.MaxHeartRate,
 		dive.MinTemperature, dive.AverageTemperature, dive.MaxTemperature,
-		string(dive.ActivityJSON), string(dive.ActivityDetailsJSON), string(dive.DiveDetailsJSON),
+		string(dive.ActivityJSON), string(dive.ActivityDetailsJSON), string(dive.DiveDetailsJSON), string(dive.FITJSON),
 	)
 	if err != nil {
 		return false, fmt.Errorf("insert dive %d: %w", dive.ID, err)
@@ -569,6 +662,46 @@ func (s *sqlStore) insertDive(ctx context.Context, tx *sql.Tx, dive storedDive) 
 		return false, fmt.Errorf("check inserted dive %d: %w", dive.ID, err)
 	}
 	return count > 0, nil
+}
+
+// Backfills add FIT data without replacing the original Connect/Dive documents
+// or non-null summary values. Each profile replacement is part of this transaction.
+func (s *sqlStore) enrichDiveFIT(ctx context.Context, tx *sql.Tx, dive storedDive) error {
+	result, err := tx.ExecContext(ctx, s.bind(`UPDATE dives SET fit_json = ?,
+		dive_number = COALESCE(dive_number, ?), duration_seconds = COALESCE(duration_seconds, ?),
+		max_depth_meters = COALESCE(max_depth_meters, ?), average_depth_meters = COALESCE(average_depth_meters, ?),
+		average_heart_rate = COALESCE(average_heart_rate, ?), max_heart_rate = COALESCE(max_heart_rate, ?),
+		min_temperature_celsius = COALESCE(min_temperature_celsius, ?),
+		average_temperature_celsius = COALESCE(average_temperature_celsius, ?),
+		max_temperature_celsius = COALESCE(max_temperature_celsius, ?),
+		entry_latitude = COALESCE(entry_latitude, ?), entry_longitude = COALESCE(entry_longitude, ?),
+		exit_latitude = COALESCE(exit_latitude, ?), exit_longitude = COALESCE(exit_longitude, ?)
+		WHERE id = ? AND fit_json = 'null'`),
+		string(dive.FITJSON), nullableInt(dive.DiveNumber), dive.Duration, dive.MaxDepth, dive.AverageDepth,
+		dive.AverageHeartRate, dive.MaxHeartRate, dive.MinTemperature, dive.AverageTemperature, dive.MaxTemperature,
+		dive.EntryLatitude, dive.EntryLongitude, dive.ExitLatitude, dive.ExitLongitude, dive.ID)
+	if err != nil {
+		return fmt.Errorf("add FIT data for dive %d: %w", dive.ID, err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil || changed == 0 {
+		return err
+	}
+	if len(dive.Samples) > 0 {
+		for _, table := range []string{"dive_samples", "dive_record_metadata"} {
+			if _, err := tx.ExecContext(ctx, s.bind("DELETE FROM "+table+" WHERE dive_id = ?"), dive.ID); err != nil {
+				return fmt.Errorf("replace FIT profile for dive %d: %w", dive.ID, err)
+			}
+		}
+	} else {
+		dive.RecordMetadata = nil
+	}
+	if len(dive.Alerts) > 0 {
+		if _, err := tx.ExecContext(ctx, s.bind(`DELETE FROM dive_alerts WHERE dive_id = ?`), dive.ID); err != nil {
+			return fmt.Errorf("replace FIT alerts for dive %d: %w", dive.ID, err)
+		}
+	}
+	return s.insertDiveChildren(ctx, tx, dive)
 }
 
 func (s *sqlStore) insertDiveChildren(ctx context.Context, tx *sql.Tx, dive storedDive) error {
@@ -587,7 +720,7 @@ func (s *sqlStore) insertDiveChildren(ctx context.Context, tx *sql.Tx, dive stor
 			return fmt.Errorf("insert alert %d for dive %d: %w", alert.Index, dive.ID, err)
 		}
 	}
-	return nil
+	return s.insertFITFiles(ctx, tx, dive.ID, dive.FITFiles)
 }
 
 const sampleInsertBatchSize = 500

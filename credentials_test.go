@@ -5,8 +5,12 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
+
+	garmin "github.com/se0wtf/go-garminconnect"
 )
 
 func TestTerminalPrompterLine(t *testing.T) {
@@ -130,6 +134,18 @@ func TestReadCredentialsCancellation(t *testing.T) {
 	_, err := readCredentials(ctx, prompt)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestLoginDoesNotUseLegacyCredentialsForPersonalCache(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokens.json")
+	if err := garmin.SaveTokens(path, garmin.Tokens{PersonalAPI: true, AccessToken: "expired-personal-token"}); err != nil {
+		t.Fatal(err)
+	}
+	prompt := &fakePrompter{}
+	_, err := login(context.Background(), path, prompt)
+	if err == nil || !strings.Contains(err.Error(), "GARMIN_PERSONAL_API_KEY") || prompt.lineCalls != 0 || prompt.secretCalls != 0 {
+		t.Fatalf("Personal API cache should require a key without prompting: %v", err)
 	}
 }
 

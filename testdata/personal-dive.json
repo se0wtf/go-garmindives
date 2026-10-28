@@ -1,0 +1,35 @@
+{
+  "activityId": 42,
+  "activityName": "Lagoon dive",
+  "description": "Boat dive",
+  "activityTypeDTO": {"typeKey": "single_gas_diving"},
+  "timeZoneUnitDTO": {"unitKey": "Pacific/Noumea", "timeZone": "Pacific/Noumea"},
+  "locationName": "Noumea Lagoon",
+  "summaryDTO": {
+    "startTimeLocal": "2026-08-15T11:13:00.000",
+    "duration": 3690,
+    "bottomTime": 3500,
+    "maxDepth": 22,
+    "averageDepth": 15,
+    "averageHR": 81,
+    "maxHR": 112,
+    "minTemperature": 0,
+    "averageTemperature": 25,
+    "maxTemperature": 26,
+    "startLatitude": 0,
+    "startLongitude": 166.4,
+    "endLatitude": null,
+    "endLongitude": null
+  },
+  "diveInfo": {
+    "weight": 6,
+    "weightUnit": {"unitKey": "kilogram"},
+    "exposureSuit": "Wetsuit",
+    "suitThickness": 5,
+    "visibility": null,
+    "diveGases": [{"oxygenPercent": 21, "heliumPercent": 0}],
+    "diveSettings": null
+  },
+  "splitSummaries": [],
+  "futureGarminField": {"preserve": true}
+}

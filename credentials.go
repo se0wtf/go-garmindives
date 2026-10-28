@@ -114,7 +114,10 @@ func readCredentials(ctx context.Context, prompt prompter) (credentials, error) 
 	return credentials{Email: email, Password: password}, nil
 }
 
-func login(ctx context.Context, tokenFile string, prompt prompter) (*garmin.Client, error) {
+func login(ctx context.Context, tokenFile string, prompt prompter, options ...garmin.Option) (*garmin.Client, error) {
+	if tokens, err := garmin.LoadTokens(tokenFile); err == nil && tokens.PersonalAPI {
+		return nil, errors.New("set GARMIN_PERSONAL_API_KEY to renew the cached Personal API session")
+	}
 	credentials, err := readCredentials(ctx, prompt)
 	if err != nil {
 		return nil, err
@@ -125,5 +128,6 @@ func login(ctx context.Context, tokenFile string, prompt prompter) (*garmin.Clie
 		}
 		return prompt.Line(providerCtx, "Garmin MFA code: ")
 	}
-	return garmin.Login(ctx, credentials.Email, credentials.Password, mfa, garmin.WithTokenFile(tokenFile))
+	options = append(options, garmin.WithTokenFile(tokenFile))
+	return garmin.Login(ctx, credentials.Email, credentials.Password, mfa, options...)
 }

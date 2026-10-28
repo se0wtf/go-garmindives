@@ -166,6 +166,7 @@ type diveDetail struct {
 	Activity        json.RawMessage        `json:"activity"`
 	ActivityDetails json.RawMessage        `json:"activity_details"`
 	DiveDetails     json.RawMessage        `json:"dive_details"`
+	FIT             json.RawMessage        `json:"fit"`
 	RecordMetadata  []recordMetadata       `json:"record_metadata"`
 	Alerts          []diveAlertAPIResponse `json:"alerts"`
 }
@@ -178,10 +179,10 @@ type diveAlertAPIResponse struct {
 }
 
 func (s *sqlStore) Dive(ctx context.Context, id int64) (diveDetail, error) {
-	row := s.db.QueryRowContext(ctx, s.bind(`SELECT `+diveSummaryColumns+`, activity_json, activity_details_json, dive_details_json FROM dives WHERE id = ?`), id)
+	row := s.db.QueryRowContext(ctx, s.bind(`SELECT `+diveSummaryColumns+`, activity_json, activity_details_json, dive_details_json, fit_json FROM dives WHERE id = ?`), id)
 	var result diveDetail
-	var activity, activityDetails, diveDetails string
-	item, err := scanDiveSummaryWithDocuments(row, &activity, &activityDetails, &diveDetails)
+	var activity, activityDetails, diveDetails, fit string
+	item, err := scanDiveSummaryWithDocuments(row, &activity, &activityDetails, &diveDetails, &fit)
 	if errors.Is(err, sql.ErrNoRows) {
 		return diveDetail{}, errDiveNotFound
 	}
@@ -192,6 +193,7 @@ func (s *sqlStore) Dive(ctx context.Context, id int64) (diveDetail, error) {
 	result.Activity = json.RawMessage(activity)
 	result.ActivityDetails = json.RawMessage(activityDetails)
 	result.DiveDetails = json.RawMessage(diveDetails)
+	result.FIT = json.RawMessage(fit)
 	result.RecordMetadata = []recordMetadata{}
 	metadataRows, err := s.db.QueryContext(ctx, s.bind(`SELECT position, key FROM dive_record_metadata WHERE dive_id = ? ORDER BY position`), id)
 	if err != nil {
@@ -235,9 +237,9 @@ func (s *sqlStore) Dive(ctx context.Context, id int64) (diveDetail, error) {
 	return result, nil
 }
 
-func scanDiveSummaryWithDocuments(row rowScanner, activity, activityDetails, diveDetails *string) (diveSummary, error) {
+func scanDiveSummaryWithDocuments(row rowScanner, activity, activityDetails, diveDetails, fit *string) (diveSummary, error) {
 	values := newDiveSummaryScan()
-	err := row.Scan(values.targets(activity, activityDetails, diveDetails)...)
+	err := row.Scan(values.targets(activity, activityDetails, diveDetails, fit)...)
 	if err != nil {
 		return diveSummary{}, err
 	}

@@ -17,10 +17,12 @@ type Archive struct {
 }
 
 type DiveRecord struct {
-	ID              int64 `yaml:"id"`
-	Activity        any   `yaml:"activity"`
-	ActivityDetails any   `yaml:"activity_details"`
-	DiveDetails     any   `yaml:"dive_details"`
+	ID              int64        `yaml:"id"`
+	Activity        any          `yaml:"activity"`
+	ActivityDetails any          `yaml:"activity_details"`
+	DiveDetails     any          `yaml:"dive_details"`
+	FIT             *fitDocument `yaml:"fit,omitempty"`
+	fitComplete     bool
 }
 
 func newArchive() Archive {

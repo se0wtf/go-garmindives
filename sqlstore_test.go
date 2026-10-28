@@ -69,7 +69,7 @@ func TestSQLiteStoreMigratesAndSavesDiveRows(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(ids, []int64{42}) {
 		t.Fatalf("DiveIDs() = %v, %v", ids, err)
 	}
-	for table, want := range map[string]int{"dives": 1, "dive_record_metadata": 6, "dive_samples": 2, "dive_alerts": 1, "schema_migrations": 2} {
+	for table, want := range map[string]int{"dives": 1, "dive_record_metadata": 6, "dive_samples": 2, "dive_alerts": 1, "schema_migrations": sqlSchemaVersion} {
 		var count int
 		if err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&count); err != nil || count != want {
 			t.Fatalf("%s count = %d, err=%v, want %d", table, count, err, want)
