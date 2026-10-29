@@ -4,7 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
+
+	"github.com/jackc/pgx/v5"
 )
 
 const (
@@ -16,6 +20,34 @@ const (
 type outputConfig struct {
 	Type     string
 	Endpoint string
+}
+
+func (c outputConfig) logDestination() string {
+	switch c.Type {
+	case outputYAML:
+		return c.Endpoint
+	case outputSQLite:
+		if c.Endpoint == "" {
+			return "dives.db"
+		}
+		if path, err := sqliteDatabasePath(c.Endpoint); err == nil {
+			if path == "" {
+				return ":memory:"
+			}
+			return path
+		}
+		return "configured SQLite database"
+	case outputPostgres:
+		// Parse the actual destination, including keyword DSNs and URL options,
+		// without logging credentials, connection options, or parsing errors.
+		config, err := pgx.ParseConfig(c.Endpoint)
+		if err != nil {
+			return "configured PostgreSQL database"
+		}
+		return net.JoinHostPort(config.Host, strconv.Itoa(int(config.Port))) + "/" + config.Database
+	default:
+		return "configured output"
+	}
 }
 
 type diveDestination interface {

@@ -180,7 +180,7 @@ Passwords and MFA codes are never written to disk.`)
 		loginFresh = nil
 	}
 	logger.Debug("stored dives loaded", "exists", existed, "dives", len(archive.Dives))
-	logger.Info("synchronizing Garmin dives")
+	logger.Info("synchronizing Garmin dives", "output_type", config.Type, "output", config.logDestination())
 	added, err := syncWithAuthentication(ctx, &archive, loadCached, loginFresh, logger)
 	if err != nil {
 		return err

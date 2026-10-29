@@ -94,7 +94,7 @@ func TestRunHelp(t *testing.T) {
 
 func TestRunUsesSQLConfigurationFromEnvironment(t *testing.T) {
 	t.Setenv("GARMIN_OUTPUT_TYPE", outputPostgres)
-	const dsn = "postgres://secret@example.invalid/dives"
+	const dsn = "postgres://secret:password@example.invalid:5432/dives?application_name=private-option"
 	t.Setenv("GARMIN_OUTPUT_DSN", dsn)
 	var config outputConfig
 	destination := &fakeDestination{archive: newArchive(), existed: true}
@@ -120,7 +120,10 @@ func TestRunUsesSQLConfigurationFromEnvironment(t *testing.T) {
 	if config != (outputConfig{Type: outputPostgres, Endpoint: dsn}) {
 		t.Fatalf("output configuration = %#v", config)
 	}
-	if strings.Contains(logs.String(), dsn) || strings.Contains(logs.String(), "secret") {
+	if !strings.Contains(logs.String(), "synchronizing Garmin dives output_type=postgres output=example.invalid:5432/dives") {
+		t.Fatalf("sync log does not show the PostgreSQL destination: %q", logs.String())
+	}
+	if strings.Contains(logs.String(), dsn) || strings.Contains(logs.String(), "secret") || strings.Contains(logs.String(), "password") || strings.Contains(logs.String(), "private-option") {
 		t.Fatalf("database credentials leaked to logs: %q", logs.String())
 	}
 }
@@ -227,7 +230,7 @@ func TestRunDefaultsToSQLite(t *testing.T) {
 	}
 	var output bytes.Buffer
 	var logOutput bytes.Buffer
-	logger, err := newAppLogger(&logOutput, "debug")
+	logger, err := newAppLogger(&logOutput, "info")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,6 +246,9 @@ func TestRunDefaultsToSQLite(t *testing.T) {
 	}
 	if !strings.Contains(logOutput.String(), "synchronisation in progress... (1/1)") {
 		t.Fatalf("progress log = %q", logOutput.String())
+	}
+	if !strings.Contains(logOutput.String(), "synchronizing Garmin dives output_type=sqlite output=dives.db") {
+		t.Fatalf("sync log does not show the default SQLite destination: %q", logOutput.String())
 	}
 }
 
