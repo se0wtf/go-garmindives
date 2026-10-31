@@ -178,7 +178,7 @@ func TestFITBlobMigrationCopiesExistingBytesWithoutDownloads(t *testing.T) {
 	if err := store.db.QueryRow(`SELECT COUNT(*) FROM dive_fit_files`).Scan(&count); err != nil || count != len(records)-1 {
 		t.Fatalf("migrated file count = %d, err=%v", count, err)
 	}
-	if err := store.db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil || version != 4 {
+	if err := store.db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil || version != sqlSchemaVersion {
 		t.Fatalf("migration version = %d, err=%v", version, err)
 	}
 }

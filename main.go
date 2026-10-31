@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -208,6 +209,8 @@ func runServeWithDependencies(ctx context.Context, args []string, output io.Writ
 	outputType := flags.String("output-type", envDefault("GARMIN_OUTPUT_TYPE", outputSQLite), "SQL output type: sqlite or postgres")
 	outputDSN := flags.String("output-dsn", strings.TrimSpace(os.Getenv("GARMIN_OUTPUT_DSN")), "SQLite database path or PostgreSQL connection URL")
 	address := flags.String("listen", envDefault("GARMIN_API_ADDR", "127.0.0.1:8080"), "REST API listen address")
+	assetsDirectory := flags.String("assets-dir", envDefault("GARMIN_ASSETS_DIR", "assets"), "directory containing media in <activityID>/<original filename>")
+	maxUploadBytes := flags.String("media-max-upload-bytes", envDefault("GARMIN_MEDIA_MAX_UPLOAD_BYTES", strconv.FormatInt(defaultMediaMaxUpload, 10)), "maximum size of one media upload in bytes (default 16 GiB)")
 	flags.Usage = func() {
 		_, _ = fmt.Fprintln(output, `Serve synchronized dives from SQLite or PostgreSQL.
 
@@ -221,6 +224,8 @@ Environment:
   GARMIN_OUTPUT_TYPE  SQL output type: sqlite (default) or postgres
   GARMIN_OUTPUT_DSN   SQLite database path or PostgreSQL connection URL
   GARMIN_API_ADDR     Listen address (default 127.0.0.1:8080)
+  GARMIN_ASSETS_DIR   Media directory (default assets)
+  GARMIN_MEDIA_MAX_UPLOAD_BYTES  Maximum upload bytes (default 17179869184)
   LOG_LEVEL           Console verbosity: debug, info, warn, error, or fatal`)
 	}
 	if err := flags.Parse(args); errors.Is(err, flag.ErrHelp) {
@@ -236,11 +241,24 @@ Environment:
 	if kind == outputSQLite && endpoint == "" {
 		endpoint = "dives.db"
 	}
+	maxUpload, err := strconv.ParseInt(*maxUploadBytes, 10, 64)
+	if err != nil || maxUpload <= 0 || maxUpload > 1<<60 {
+		return errors.New("media upload limit must be a positive byte count no greater than 2^60")
+	}
 	store, err := openStore(ctx, kind, endpoint)
 	if err != nil {
 		return err
 	}
 	defer store.Close()
+	media, err := openMediaLibrary(store, *assetsDirectory, maxUpload, logger)
+	if err != nil {
+		return fmt.Errorf("open media assets: %w", err)
+	}
+	defer media.Close()
+	store.media = media
+	if _, err := media.Scan(ctx, false); err != nil {
+		return fmt.Errorf("scan media assets: %w", err)
+	}
 	return serve(ctx, strings.TrimSpace(*address), store, logger)
 }
 

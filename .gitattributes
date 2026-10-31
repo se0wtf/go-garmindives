@@ -1,0 +1,2 @@
+# Preserve the upstream bundled license notices verbatim.
+docs/swagger/swagger-ui-bundle.js.LICENSE.txt whitespace=-blank-at-eol

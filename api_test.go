@@ -228,6 +228,7 @@ func TestAPIListenAddressSafety(t *testing.T) {
 }
 
 func TestRunServeConfigurationAndHelp(t *testing.T) {
+	t.Setenv("GARMIN_ASSETS_DIR", t.TempDir())
 	var help bytes.Buffer
 	if err := runServe(context.Background(), []string{"-h"}, &help, testLogger(t)); err != nil {
 		t.Fatal(err)
@@ -260,6 +261,7 @@ func TestRunServeConfigurationAndHelp(t *testing.T) {
 }
 
 func TestRunServeUsesEnvironment(t *testing.T) {
+	t.Setenv("GARMIN_ASSETS_DIR", t.TempDir())
 	t.Setenv("GARMIN_OUTPUT_TYPE", outputSQLite)
 	t.Setenv("GARMIN_OUTPUT_DSN", "environment.db")
 	t.Setenv("GARMIN_API_ADDR", "localhost:9191")

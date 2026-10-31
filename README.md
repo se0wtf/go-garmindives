@@ -4,7 +4,8 @@
 or PostgreSQL. It supports Garmin's official Personal API through an API key,
 and the legacy Connect/Dive APIs through an account login. Each dive preserves
 the available JSON documents, original FIT files, and all decoded FIT messages,
-including depth-over-time samples.
+including depth-over-time samples. The local API also manages photos and videos
+attached to each activity, with originals on disk and media metadata in SQL.
 
 The app is unofficial and is not affiliated with Garmin.
 
@@ -208,6 +209,18 @@ It listens on `127.0.0.1:8080` by default. Change this with `-listen` or
 to a trusted network. Browser access from a separately hosted JavaScript
 frontend is enabled through CORS.
 
+Browse the interactive **Swagger UI** at
+[`http://127.0.0.1:8080/swagger/`](http://127.0.0.1:8080/swagger/) (also available
+through `/docs`). It covers every dive and media endpoint, including multipart
+uploads, pagination, file ranges, error responses, and 360-degree projection metadata.
+Use **Try it out** to call the running local API.
+
+The OpenAPI 3.0.3 specification is available at `/api/v1/openapi.json` and
+`/api/v1/openapi.yaml`. Use either URL with a frontend client/type generator.
+[`docs/openapi.yaml`](docs/openapi.yaml) is the editable source; the JSON is derived
+from it automatically. The specification and Swagger UI assets are embedded in
+the Go binary and work offline, without a CDN or external validation service.
+
 The versioned endpoints are:
 
 - `GET /api/v1/health`
@@ -228,7 +241,133 @@ request. Sample lists use the same scheme with a default of 5,000 and maximum
 of 10,000 rows per page. The dive detail endpoint includes the available original
 Garmin JSON documents, the complete `fit` document, record metadata, and alerts; the samples endpoint
 provides graph-ready elapsed time, depth, heart rate, temperature, gas, and
-decompression values.
+decompression values. Dive details also include a `media` array with attachment
+metadata, original URLs, and available thumbnail URLs.
+
+## Photos and videos
+
+Start the server with a media directory:
+
+```sh
+go-garmindives serve -output-dsn /path/to/dives.db -assets-dir /path/to/assets
+```
+
+`-assets-dir` defaults to `assets` in the working directory. It can also be set
+with `GARMIN_ASSETS_DIR`. Keep the same assets directory with its database.
+Install **FFmpeg**, including `ffmpeg` and `ffprobe`, on `PATH` for metadata and
+thumbnail generation (`brew install ffmpeg` on macOS, or your Linux package
+manager's FFmpeg package). Thumbnail processing currently targets Linux/macOS.
+The [FFprobe documentation](https://ffmpeg.org/ffprobe.html) describes the stream
+and format metadata retained in each media item's `probe` document.
+
+Copy originals directly into a directory named with the **activity ID** returned
+as `dive.id` by the API (the SQL `dives.id`, not `garmin_dive_id` or dive number):
+
+```text
+assets/
+  123456789/
+    Turtle original.jpeg
+    Reef 360.MP4
+```
+
+Original filenames, capitalization, and bytes are preserved. Filenames must be
+at most 255 bytes and cannot contain path separators, control characters, or
+start with a dot. Activity directories contain files directly; nested directories
+and symlinks are skipped. Supported extensions include JPEG/JPS, PNG, GIF, WebP,
+HEIC/HEIF, AVIF, TIFF, BMP, MP4/M4V, MOV, MKV, WebM, AVI, MTS/M2TS, 3GP, INSV, and .360.
+Actual metadata/thumbnail support depends on the installed FFmpeg build.
+
+Every `serve` startup scans the assets directory **before listening**. It adds
+new files, updates changed files, rebuilds missing/failed thumbnails, and removes
+index entries and cached thumbnails for originals deleted from disk. Unchanged
+files are skipped using size and modification time. Folders whose activities
+are not yet in the database are logged and left untouched for a later scan.
+Each changed file and a final added/updated/unchanged/removed/skipped/failed count
+are logged. Individual processing failures are logged without stopping the server.
+The `sync` command continues to synchronize Garmin data; it does not scan media.
+
+For files copied while the server runs, call the rescan endpoint below or restart
+`serve`. There is no background filesystem watcher. Copy through a hidden temporary
+filename, then rename into place once finished to avoid scanning incomplete files.
+Use `?force=true` to hash/reprocess every file, including changes made by tools
+that preserve both size and modification time.
+
+The media APIs have no authentication, as with the existing dive API:
+
+| Method and path | Purpose |
+| --- | --- |
+| `POST /api/v1/dives/{id}/media` | Upload one multipart file, field name `file` |
+| `GET /api/v1/dives/{id}/media` | List media, sorted by filename; `limit` defaults to 50 (maximum 100), with an opaque `cursor` |
+| `GET /api/v1/dives/{id}/media/{mediaID}` | Read attachment metadata |
+| `PATCH /api/v1/dives/{id}/media/{mediaID}` | Update caption or 360-degree projection settings |
+| `DELETE /api/v1/dives/{id}/media/{mediaID}` | Delete the original, thumbnail, and metadata |
+| `GET /api/v1/dives/{id}/media/{mediaID}/thumbnail` | Serve the JPEG thumbnail |
+| `GET /assets/{activityID}/{original filename}` | Serve the original; URL-encode the filename |
+| `POST /api/v1/media/scan` | Scan/reconcile files; optional `?force=true` |
+| `GET /api/v1/media/status` | Read totals, thumbnail status counts, and upload limits |
+
+For example:
+
+```sh
+curl -F 'file=@/path/to/Turtle original.jpeg' \
+  http://127.0.0.1:8080/api/v1/dives/123456789/media
+
+curl -X POST http://127.0.0.1:8080/api/v1/media/scan
+
+curl -X PATCH -H 'Content-Type: application/json' \
+  -d '{"caption":"Reef wall panorama","projection":"360"}' \
+  http://127.0.0.1:8080/api/v1/dives/123456789/media/MEDIA_ID
+```
+
+Uploads stream to disk and publish only after the complete multipart request is
+validated. They return `201` with the media object and a `Location` header.
+An existing filename within the activity returns `409`; uploads never overwrite
+it, even if the existing file has not been indexed yet. The default per-file
+upload limit is **16 GiB**, configurable with `-media-max-upload-bytes` or
+`GARMIN_MEDIA_MAX_UPLOAD_BYTES`; oversized uploads return `413`. Direct filesystem
+imports have no upload-size limit. Uploads have a one-hour request read deadline.
+
+Media objects include `id`, `dive_id`, `filename`, `kind`, `content_type`,
+`size_bytes`, `sha256`, `width`, `height`, `duration_seconds`, `caption`,
+`projection`, `effective_projection`, optional `projection_format`, timestamps, `probe`, `url`,
+and `thumbnail_status` (`ready` or `error`). A successful thumbnail adds
+`thumbnail_url`; a failed inspection or thumbnail adds `thumbnail_error` instead.
+Originals are still accepted and served when tools/codecs are missing; install
+the tools and rescan to retry. Thumbnails are JPEG images with a maximum dimension
+of 640 pixels, stored separately under `assets/.thumbnails`.
+
+Original and thumbnail endpoints support `HEAD`, HTTP byte ranges for video
+seeking, ETags, and conditional requests. Directory browsing is disabled. If an
+original changed on disk since indexing, serving returns `409 media_changed`
+until a rescan refreshes its metadata and validators.
+
+**360-degree videos** retain their complete original container and spherical
+metadata. New media uses `projection: "auto"`: explicit spherical mapping metadata
+identifies full equirectangular/cubemap 360 footage. A wide aspect ratio or filename
+alone does not mark a file as 360. `effective_projection` resolves to `flat`, `180`,
+or `360` so the frontend can choose its player; `projection_format` identifies
+the source texture format when known.
+
+For a stitched equirectangular export without spherical metadata, set
+`projection: "360"` through PATCH, as shown above. `flat` forces normal playback;
+`auto` returns to metadata detection. Changing projection regenerates the
+thumbnail, and rescans preserve explicit overrides. Existing media previously
+stored with `flat` keeps that setting until updated through PATCH.
+
+Equirectangular 360 media gets a **640x360 perspective thumbnail**, using FFmpeg's
+[v360 filter](https://ffmpeg.org/ffmpeg-filters.html#v360), for a normal preview in
+the frontend. Other projection formats keep a scaled decoded frame. Stereo layout
+fields remain optional for stereoscopic footage; ordinary 360 video needs no stereo
+setting. Originals are served with byte ranges for the frontend's 360 player.
+The server does not stitch raw camera footage or convert playback formats.
+For reliable panoramic previews and browser playback, use a stitched equirectangular
+MP4/MOV export from your camera software. Raw `.insv`/`.360` files are retained and
+served, with preview availability depending on FFmpeg's support for that format.
+
+The `dive_media` table stores metadata only. Back up **both the database and assets
+directory** to retain your originals. Removing an attachment through the API deletes
+its files; deleting an entire dive from SQL cascades its media metadata but leaves
+the originals available for a later reimport.
 
 ## Development
 
@@ -242,6 +381,9 @@ Tests are offline by default, including Personal API authentication, incremental
 sync, FIT decoding, developer/unknown fields, invalid values, compressed
 timestamps, CRC errors, transactional backfills, YAML/SQLite output, REST
 responses, and missing versus zero measurements.
+Documentation tests check that API routes and response fields match the OpenAPI
+contract, that its references resolve, and that the bundled UI/spec routes work.
+CI also validates the specification with `openapi-spec-validator`.
 Original FIT storage tests cover binary round trips, offline re-decoding,
 migration from existing JSON, rollback, checksums, and cascading deletion.
 Request-pacing tests use a fake clock and cover concurrent callers, HTTP 429,

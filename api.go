@@ -58,23 +58,29 @@ type errorResponse struct {
 func newAPIHandler(store *sqlStore, logger *charmLog.Logger) http.Handler {
 	server := &apiServer{store: store, logger: logger}
 	mux := http.NewServeMux()
+	registerDocumentationRoutes(mux)
 	mux.HandleFunc("GET /api/v1/health", server.health)
 	mux.HandleFunc("GET /api/v1/dives", server.listDives)
 	mux.HandleFunc("GET /api/v1/dives/{id}", server.getDive)
 	mux.HandleFunc("GET /api/v1/dives/{id}/samples", server.listSamples)
+	server.registerMediaRoutes(mux)
 	return apiMiddleware(mux)
 }
 
 func apiMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, POST, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Range, If-None-Match, If-Modified-Since, If-Range")
+		w.Header().Set("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges, ETag, Last-Modified, Content-Disposition, Location")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Cache-Control", "no-store")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/assets/") || strings.Contains(r.URL.Path, "/media") {
+			mediaDeadlines(w)
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -275,6 +281,7 @@ func serveAPI(ctx context.Context, address string, store *sqlStore, logger *char
 	}
 	server := &http.Server{
 		Handler:           newAPIHandler(store, logger),
+		BaseContext:       func(net.Listener) context.Context { return ctx },
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -285,7 +292,7 @@ func serveAPI(ctx context.Context, address string, store *sqlStore, logger *char
 		result <- server.Serve(listener)
 	}()
 	if logger != nil {
-		logger.Info("REST API listening", "address", listener.Addr().String())
+		logger.Info("REST API listening", "address", listener.Addr().String(), "swagger", "/swagger/")
 		if !isLoopbackAddress(address) {
 			logger.Warn("REST API has no authentication; only expose it to trusted networks", "address", address)
 		}

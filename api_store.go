@@ -169,6 +169,7 @@ type diveDetail struct {
 	FIT             json.RawMessage        `json:"fit"`
 	RecordMetadata  []recordMetadata       `json:"record_metadata"`
 	Alerts          []diveAlertAPIResponse `json:"alerts"`
+	Media           []mediaItem            `json:"media"`
 }
 
 type diveAlertAPIResponse struct {
@@ -233,6 +234,13 @@ func (s *sqlStore) Dive(ctx context.Context, id int64) (diveDetail, error) {
 	}
 	if err := alertRows.Err(); err != nil {
 		return diveDetail{}, fmt.Errorf("list dive alerts for API: %w", err)
+	}
+	if err := alertRows.Close(); err != nil {
+		return diveDetail{}, err
+	}
+	result.Media, err = s.mediaForDive(ctx, id)
+	if err != nil {
+		return diveDetail{}, fmt.Errorf("list dive media: %w", err)
 	}
 	return result, nil
 }

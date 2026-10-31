@@ -1,0 +1,780 @@
+openapi: 3.0.3
+info:
+  title: go-garmindives API
+  version: 1.0.0
+  description: |
+    Read synchronized Garmin dives and manage their photos and videos locally.
+    No authentication or Garmin credentials are required by this server.
+
+    Dive IDs are Garmin activity IDs (SQL dives.id), distinct from Garmin Dive
+    IDs and dive numbers. Optional measurements are omitted when unavailable;
+    recorded zeroes are preserved. Depth is in meters, temperature in Celsius,
+    durations in seconds, and sample timestamps/elapsed times in milliseconds.
+
+    Media originals retain their filenames and bytes. Metadata and thumbnails
+    are indexed at server startup or by POST /api/v1/media/scan. Uploads and scans
+    process files synchronously and can take time for large/360-degree videos.
+servers:
+  - url: /
+    description: The server hosting this specification
+security: []
+tags:
+  - name: Health
+    description: Local database health
+  - name: Dives
+    description: Dive summaries, source documents, FIT data, and graph samples
+  - name: Media
+    description: Photos, videos, 360-degree projection metadata, captions, and filesystem indexing
+  - name: Assets
+    description: Original media and JPEG thumbnails with range/conditional requests
+
+paths:
+  /api/v1/health:
+    get:
+      tags: [Health]
+      operationId: getHealth
+      summary: Check database connectivity
+      responses:
+        '200':
+          description: The local SQL database is reachable.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+              example: { status: ok }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/dives:
+    get:
+      tags: [Dives]
+      operationId: listDives
+      summary: List dives, newest first
+      description: Ordered by local_date, start_time, and activity ID descending. Pass next_cursor unchanged for the following page.
+      parameters:
+        - { $ref: '#/components/parameters/PageLimit' }
+        - { $ref: '#/components/parameters/Cursor' }
+        - name: from
+          in: query
+          description: Inclusive local date, YYYY-MM-DD.
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          description: Inclusive local date, YYYY-MM-DD. Must not precede from.
+          schema: { type: string, format: date }
+        - name: location
+          in: query
+          description: Case-insensitive substring of the dive location.
+          schema: { type: string }
+      responses:
+        '200':
+          description: A page of dive summaries. next_cursor is omitted on the last page.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DiveList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/dives/{id}:
+    parameters:
+      - { $ref: '#/components/parameters/ActivityID' }
+    get:
+      tags: [Dives]
+      operationId: getDive
+      summary: Read a dive with source documents, decoded FIT data, and media
+      description: |
+        Raw Garmin documents can contain additional fields or be null. Personal
+        API dives have activity_details set to null; their samples come from FIT.
+        The fit document includes every decoded message and original FIT bytes.
+      responses:
+        '200':
+          description: Dive summary and all retained documents.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DiveDetail' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/dives/{id}/samples:
+    parameters:
+      - { $ref: '#/components/parameters/ActivityID' }
+    get:
+      tags: [Dives]
+      operationId: listDiveSamples
+      summary: Read dive profile samples in sample-index order
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 10000, default: 5000 }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses:
+        '200':
+          description: A page of samples. Missing metrics are omitted; next_cursor is omitted on the last page.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SampleList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/dives/{id}/media:
+    parameters:
+      - { $ref: '#/components/parameters/ActivityID' }
+    get:
+      tags: [Media]
+      operationId: listDiveMedia
+      summary: List attachments, sorted by original filename
+      parameters:
+        - { $ref: '#/components/parameters/PageLimit' }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses:
+        '200':
+          description: A page of media. next_cursor is omitted on the last page.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MediaList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    post:
+      tags: [Media]
+      operationId: uploadDiveMedia
+      summary: Upload one original photo or video
+      description: |
+        Send exactly one multipart field named file, retaining its original
+        filename. Filenames cannot start with a dot or contain path separators
+        or control characters, and are limited to 255 bytes. Existing names
+        return 409 and are never overwritten, including files not yet indexed.
+        The default upload limit is 16 GiB; read the current limit from media/status.
+        Processing is synchronous. An unsupported codec or missing FFmpeg still
+        returns 201 with thumbnail_status=error; the original remains available.
+        Spherical projection metadata is detected when present. Use PATCH with
+        projection="360" for an untagged stitched equirectangular export.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              additionalProperties: false
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: One photo or video with its original filename.
+      responses:
+        '201':
+          description: Original stored and indexed; inspect thumbnail_status for processing results.
+          headers:
+            Location:
+              description: Relative URL of the created attachment metadata.
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MediaItem' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/UploadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMedia' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/dives/{id}/media/{mediaID}:
+    parameters:
+      - { $ref: '#/components/parameters/ActivityID' }
+      - { $ref: '#/components/parameters/MediaID' }
+    get:
+      tags: [Media]
+      operationId: getDiveMedia
+      summary: Read attachment metadata and URLs
+      responses:
+        '200':
+          description: Media metadata; originals and thumbnails are served separately.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MediaItem' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    patch:
+      tags: [Media]
+      operationId: updateDiveMedia
+      summary: Update caption or 360-degree projection settings
+      description: |
+        Provide at least one field. Omitted fields are kept. An empty caption
+        clears it. Changing projection or stereo_layout regenerates the JPEG
+        thumbnail. Use projection="360" for an untagged stitched equirectangular
+        video, "flat" to disable spherical playback, or "auto" to use detected
+        metadata. Originals are never converted or modified.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MediaPatch' }
+            example: { caption: Reef wall panorama, projection: '360' }
+      responses:
+        '200':
+          description: Updated media metadata and thumbnail status.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MediaItem' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    delete:
+      tags: [Media]
+      operationId: deleteDiveMedia
+      summary: Delete an attachment and its files
+      description: Deletes the original file, cached thumbnail, and database metadata.
+      responses:
+        '204':
+          description: Attachment deleted; the response body is empty.
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/dives/{id}/media/{mediaID}/thumbnail:
+    parameters:
+      - { $ref: '#/components/parameters/ActivityID' }
+      - { $ref: '#/components/parameters/MediaID' }
+      - { $ref: '#/components/parameters/Range' }
+      - { $ref: '#/components/parameters/IfNoneMatch' }
+      - { $ref: '#/components/parameters/IfModifiedSince' }
+      - { $ref: '#/components/parameters/IfRange' }
+      - name: v
+        in: query
+        description: Optional thumbnail version from thumbnail_url; the current thumbnail is always served.
+        schema: { type: string }
+    get:
+      tags: [Assets]
+      operationId: getDiveMediaThumbnail
+      summary: Serve the JPEG thumbnail, up to 640 pixels per dimension
+      description: Equirectangular 360-degree media uses a 640x360 perspective preview. Other formats use a scaled decoded frame. A missing or failed thumbnail returns 404 thumbnail_unavailable; rescan to retry processing.
+      responses:
+        '200':
+          description: Complete JPEG thumbnail.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Last-Modified: { $ref: '#/components/headers/LastModified' }
+            Accept-Ranges: { $ref: '#/components/headers/AcceptRanges' }
+          content:
+            image/jpeg:
+              schema: { type: string, format: binary }
+        '206': { $ref: '#/components/responses/PartialFile' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '416': { $ref: '#/components/responses/RangeNotSatisfiable' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    head:
+      tags: [Assets]
+      operationId: headDiveMediaThumbnail
+      summary: Read thumbnail headers without downloading it
+      responses:
+        '200': { $ref: '#/components/responses/FileHeaders' }
+        '206': { $ref: '#/components/responses/PartialFileHeaders' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '416': { $ref: '#/components/responses/RangeNotSatisfiable' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /assets/{id}/{filename}:
+    parameters:
+      - { $ref: '#/components/parameters/ActivityID' }
+      - name: filename
+        in: path
+        required: true
+        description: Original filename from MediaItem.filename; URL-encode it or use MediaItem.url directly.
+        schema: { type: string, minLength: 1 }
+        example: Turtle original.jpeg
+      - { $ref: '#/components/parameters/Range' }
+      - { $ref: '#/components/parameters/IfNoneMatch' }
+      - { $ref: '#/components/parameters/IfModifiedSince' }
+      - { $ref: '#/components/parameters/IfRange' }
+    get:
+      tags: [Assets]
+      operationId: getMediaOriginal
+      summary: Serve an original photo or video
+      description: |
+        Streams original bytes with their stored Content-Type and inline filename.
+        Range requests support video seeking. If an indexed file changed on disk,
+        returns 409 media_changed until a rescan refreshes its metadata. Directory
+        browsing is disabled. The frontend can use effective_projection and
+        projection_format to select a 360-degree player; the server preserves
+        the original container without transcoding or stitching camera footage.
+      responses:
+        '200': { $ref: '#/components/responses/CompleteFile' }
+        '206': { $ref: '#/components/responses/PartialFile' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '416': { $ref: '#/components/responses/RangeNotSatisfiable' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    head:
+      tags: [Assets]
+      operationId: headMediaOriginal
+      summary: Read original-file headers without downloading it
+      responses:
+        '200': { $ref: '#/components/responses/FileHeaders' }
+        '206': { $ref: '#/components/responses/PartialFileHeaders' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '416': { $ref: '#/components/responses/RangeNotSatisfiable' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/media/scan:
+    post:
+      tags: [Media]
+      operationId: scanMediaAssets
+      summary: Reconcile media metadata and thumbnails with the assets directory
+      description: |
+        Scans assets/<activityID>/<original filename>. Adds new files, updates
+        changed files, retries missing/failed thumbnails, and removes index
+        entries for deleted originals. Unknown activity folders, symlinks, nested
+        folders, and unsupported extensions are skipped. The request waits for
+        completion. Individual processing failures are counted and logged while
+        other files continue; a scan can return 200 with failed greater than zero.
+      parameters:
+        - name: force
+          in: query
+          description: Hash and reprocess every file, including unchanged size/mtime. Defaults to false.
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Scan completed; failed includes indexing or thumbnail failures.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MediaScanResult' }
+              example: { scanned: 10, added: 2, updated: 1, unchanged: 7, removed: 0, skipped: 0, failed: 0 }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/media/status:
+    get:
+      tags: [Media]
+      operationId: getMediaStatus
+      summary: Read indexed media totals and configured upload limits
+      responses:
+        '200':
+          description: Global totals across all activities and the active server's upload/thumbnail limits.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MediaStatus' }
+              example: { total: 12, photos: 10, videos: 2, thumbnails_ready: 11, thumbnails_failed: 1, max_upload_bytes: 17179869184, thumbnail_max_dimension: 640 }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+components:
+  parameters:
+    ActivityID:
+      name: id
+      in: path
+      required: true
+      description: Garmin activity ID (dive.id / SQL dives.id), distinct from garmin_dive_id and dive_number.
+      schema: { type: integer, format: int64, minimum: 1 }
+      example: 123456789
+    MediaID:
+      name: mediaID
+      in: path
+      required: true
+      description: Opaque attachment ID from MediaItem.id.
+      schema: { type: string }
+      example: 4f899e011d1c4c18b1034b9e5a335198
+    PageLimit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+    Cursor:
+      name: cursor
+      in: query
+      description: Opaque next_cursor from the previous page of the same endpoint; omit on the first request.
+      schema: { type: string }
+    Range:
+      name: Range
+      in: header
+      description: HTTP byte range for partial downloads or video seeking.
+      schema: { type: string }
+      example: bytes=0-1023
+    IfNoneMatch:
+      name: If-None-Match
+      in: header
+      description: Previously received quoted ETag. A match returns 304 with no body.
+      schema: { type: string }
+    IfModifiedSince:
+      name: If-Modified-Since
+      in: header
+      description: Previously received Last-Modified HTTP date.
+      schema: { type: string }
+    IfRange:
+      name: If-Range
+      in: header
+      description: ETag or HTTP date to make a byte-range request conditional.
+      schema: { type: string }
+
+  headers:
+    ETag:
+      description: Quoted content/version hash for cache validation.
+      schema: { type: string }
+    LastModified:
+      description: File modification time as an HTTP date.
+      schema: { type: string }
+    AcceptRanges:
+      description: Supported range unit.
+      schema: { type: string, enum: [bytes] }
+    ContentLength:
+      description: Number of bytes in the response body (or corresponding GET response for HEAD).
+      schema: { type: integer, format: int64, minimum: 0 }
+    ContentRange:
+      description: Returned byte range and total file size.
+      schema: { type: string }
+      example: bytes 0-1023/1048576
+    ContentDisposition:
+      description: Inline disposition with the original filename (or generated JPEG thumbnail filename).
+      schema: { type: string }
+
+  responses:
+    BadRequest:
+      description: Invalid ID, query, cursor, JSON, or multipart request.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          example: { error: { code: invalid_request, message: Request parameters are invalid } }
+    NotFound:
+      description: Dive, attachment, file, or thumbnail unavailable. Failed thumbnails use error code thumbnail_unavailable.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          example: { error: { code: not_found, message: Dive or media not found } }
+    Conflict:
+      description: Filename already exists (conflict), or the original changed on disk (media_changed); rescan before serving changed originals.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    UploadTooLarge:
+      description: Upload exceeds the configured per-file size limit.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          example: { error: { code: upload_too_large, message: File exceeds the configured upload limit } }
+    UnsupportedMedia:
+      description: Unsupported filename or media extension.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          example: { error: { code: unsupported_media, message: Unsupported media filename or extension } }
+    InternalError:
+      description: Local database, filesystem, or server error.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          example: { error: { code: internal_error, message: Internal server error } }
+    CompleteFile:
+      description: Complete original bytes, using the stored media Content-Type.
+      headers:
+        ETag: { $ref: '#/components/headers/ETag' }
+        Last-Modified: { $ref: '#/components/headers/LastModified' }
+        Accept-Ranges: { $ref: '#/components/headers/AcceptRanges' }
+        Content-Length: { $ref: '#/components/headers/ContentLength' }
+        Content-Disposition: { $ref: '#/components/headers/ContentDisposition' }
+      content:
+        '*/*':
+          schema: { type: string, format: binary }
+    PartialFile:
+      description: Requested byte range; a multi-range request uses multipart/byteranges.
+      headers:
+        ETag: { $ref: '#/components/headers/ETag' }
+        Accept-Ranges: { $ref: '#/components/headers/AcceptRanges' }
+        Content-Range: { $ref: '#/components/headers/ContentRange' }
+        Content-Length: { $ref: '#/components/headers/ContentLength' }
+      content:
+        '*/*':
+          schema: { type: string, format: binary }
+    FileHeaders:
+      description: File headers only; no response body.
+      headers:
+        ETag: { $ref: '#/components/headers/ETag' }
+        Last-Modified: { $ref: '#/components/headers/LastModified' }
+        Accept-Ranges: { $ref: '#/components/headers/AcceptRanges' }
+        Content-Length: { $ref: '#/components/headers/ContentLength' }
+        Content-Disposition: { $ref: '#/components/headers/ContentDisposition' }
+    PartialFileHeaders:
+      description: Requested byte-range headers only; no response body.
+      headers:
+        ETag: { $ref: '#/components/headers/ETag' }
+        Content-Range: { $ref: '#/components/headers/ContentRange' }
+        Content-Length: { $ref: '#/components/headers/ContentLength' }
+    NotModified:
+      description: Cached file is current; no response body.
+      headers:
+        ETag: { $ref: '#/components/headers/ETag' }
+        Last-Modified: { $ref: '#/components/headers/LastModified' }
+    PreconditionFailed:
+      description: A conditional request precondition failed. File-serving errors can have an empty or plain-text body.
+    RangeNotSatisfiable:
+      description: Invalid or unsatisfiable byte range. GET returns a plain-text error; HEAD has no body.
+      headers:
+        Content-Range: { $ref: '#/components/headers/ContentRange' }
+      content:
+        text/plain:
+          schema: { type: string }
+
+  schemas:
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [ok] }
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string, description: Machine-readable error code. }
+            message: { type: string, description: Human-readable explanation. }
+    JSONValue:
+      description: Arbitrary retained JSON, including objects, arrays, scalars, or null. Garmin and FIT fields may evolve.
+    DiveList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/DiveSummary' }
+        next_cursor: { type: string, description: Omitted on the last page. }
+    DiveSummary:
+      type: object
+      required: [id, name, activity_type, dive_type, start_time, local_date, timezone, location, notes, description]
+      properties:
+        id: { type: integer, format: int64, description: Garmin activity ID. }
+        garmin_dive_id: { type: integer, format: int64, description: Separate identifier from Garmin Dive when available. }
+        dive_number: { type: integer }
+        name: { type: string }
+        activity_type: { type: string }
+        dive_type: { type: string }
+        start_time: { type: string, description: 'Recorded start time, usually ISO 8601; empty if unavailable.' }
+        local_date: { type: string, description: Local YYYY-MM-DD date; empty if unavailable. }
+        timezone: { type: string }
+        location: { type: string }
+        entry_latitude: { type: number, format: double }
+        entry_longitude: { type: number, format: double }
+        exit_latitude: { type: number, format: double }
+        exit_longitude: { type: number, format: double }
+        notes: { type: string }
+        description: { type: string }
+        duration_seconds: { type: number, format: double }
+        max_depth_meters: { type: number, format: double }
+        average_depth_meters: { type: number, format: double }
+        average_heart_rate: { type: number, format: double, description: Beats per minute. }
+        max_heart_rate: { type: number, format: double, description: Beats per minute. }
+        min_temperature_celsius: { type: number, format: double }
+        average_temperature_celsius: { type: number, format: double }
+        max_temperature_celsius: { type: number, format: double }
+    DiveDetail:
+      type: object
+      required: [dive, activity, activity_details, dive_details, fit, record_metadata, alerts, media]
+      properties:
+        dive: { $ref: '#/components/schemas/DiveSummary' }
+        activity: { $ref: '#/components/schemas/JSONValue' }
+        activity_details: { $ref: '#/components/schemas/JSONValue' }
+        dive_details: { $ref: '#/components/schemas/JSONValue' }
+        fit: { $ref: '#/components/schemas/FITDocument' }
+        record_metadata:
+          type: array
+          items: { $ref: '#/components/schemas/RecordMetadata' }
+        alerts:
+          type: array
+          items: { $ref: '#/components/schemas/DiveAlert' }
+        media:
+          type: array
+          items: { $ref: '#/components/schemas/MediaItem' }
+    RecordMetadata:
+      type: object
+      required: [position, key]
+      properties:
+        position: { type: integer }
+        key: { type: string }
+    DiveAlert:
+      type: object
+      required: [index, type, data]
+      properties:
+        index: { type: integer }
+        timestamp_ms: { type: integer, format: int64, description: Unix milliseconds. }
+        type: { type: string }
+        data: { $ref: '#/components/schemas/JSONValue' }
+    SampleList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/DiveSample' }
+        next_cursor: { type: string }
+    DiveSample:
+      type: object
+      required: [index, timestamp_ms, elapsed_ms, raw]
+      properties:
+        index: { type: integer, minimum: 0 }
+        timestamp_ms: { type: integer, format: int64, description: Unix milliseconds. }
+        elapsed_ms: { type: integer, format: int64, description: Milliseconds since the profile start. }
+        heart_rate: { type: number, format: double, description: Beats per minute. }
+        temperature_celsius: { type: number, format: double }
+        depth_meters: { type: number, format: double }
+        next_stop_depth_meters: { type: number, format: double }
+        next_stop_time_seconds: { type: number, format: double }
+        time_to_surface_seconds: { type: number, format: double }
+        ndl_time_seconds: { type: number, format: double }
+        percent_cns_load: { type: number, format: double }
+        percent_n2_load: { type: number, format: double }
+        psac: { type: number, format: double, description: Pressure-based surface air consumption in bar/min. }
+        rmv: { type: number, format: double, description: Respiratory minute volume in L/min. }
+        vsac: { type: number, format: double, description: Volume-based surface air consumption in L/min. }
+        air_time_remaining_seconds: { type: number, format: double }
+        po2: { type: number, format: double, description: Oxygen partial pressure in bar. }
+        ascent_rate: { type: number, format: double, description: Meters per second. }
+        raw: { $ref: '#/components/schemas/JSONValue' }
+    FITDocument:
+      type: object
+      nullable: true
+      description: Full decoded FIT archive; null if no FIT data is stored. Unknown messages/fields retain numeric identifiers.
+      required: [version, files]
+      properties:
+        version: { type: integer, example: 1 }
+        files:
+          type: array
+          items: { $ref: '#/components/schemas/FITFile' }
+    FITFile:
+      type: object
+      required: [name, original_base64, sequences]
+      properties:
+        name: { type: string }
+        original_base64: { type: string, format: byte, description: Exact original FIT bytes encoded as base64. }
+        sequences:
+          type: array
+          items: { $ref: '#/components/schemas/FITSequence' }
+    FITSequence:
+      type: object
+      required: [protocol_version, profile_version, messages]
+      properties:
+        protocol_version: { type: integer }
+        profile_version: { type: integer }
+        messages:
+          type: array
+          items: { $ref: '#/components/schemas/FITMessage' }
+    FITMessage:
+      type: object
+      required: [number, name, fields]
+      properties:
+        number: { type: integer }
+        name: { type: string }
+        timestamp_ms: { type: integer, format: int64, description: Unix milliseconds when the message has a valid timestamp. }
+        fields:
+          type: array
+          items: { $ref: '#/components/schemas/FITField' }
+        developer_fields:
+          type: array
+          items: { $ref: '#/components/schemas/FITField' }
+    FITField:
+      type: object
+      required: [number, name, type, base_type, scale, offset, raw, value]
+      properties:
+        number: { type: integer }
+        name: { type: string }
+        type: { type: string }
+        base_type: { type: string }
+        units: { type: string }
+        scale: { type: number, format: double }
+        offset: { type: number, format: double }
+        raw: { $ref: '#/components/schemas/JSONValue' }
+        value: { $ref: '#/components/schemas/JSONValue' }
+        developer_data_index: { type: integer }
+        expanded: { type: boolean }
+    MediaList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/MediaItem' }
+        next_cursor: { type: string }
+    StereoLayout:
+      type: string
+      enum: [auto, mono, side_by_side, top_bottom, multiview]
+      description: auto uses detected metadata; explicit layouts also control thumbnail eye selection.
+    Projection:
+      type: string
+      enum: [auto, flat, '180', '360']
+      description: Defaults to auto for new media. Uses spherical metadata when present; explicit 360 denotes a stitched equirectangular export when no format metadata is available.
+    MediaItem:
+      type: object
+      required: [id, dive_id, filename, kind, content_type, size_bytes, sha256, width, height, duration_seconds, stereo_layout, projection, effective_projection, caption, thumbnail_status, probe, created_at, updated_at, url]
+      properties:
+        id: { type: string, description: Opaque attachment identifier. }
+        dive_id: { type: integer, format: int64, description: Garmin activity ID. }
+        filename: { type: string, description: 'Original filename, preserved exactly.' }
+        kind: { type: string, enum: [photo, video] }
+        content_type: { type: string }
+        size_bytes: { type: integer, format: int64, minimum: 1 }
+        sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+        width: { type: integer, minimum: 0, description: Original encoded width; zero if inspection failed. }
+        height: { type: integer, minimum: 0, description: Original encoded height; zero if inspection failed. }
+        duration_seconds: { type: number, format: double, minimum: 0 }
+        stereo_layout: { $ref: '#/components/schemas/StereoLayout' }
+        detected_stereo_layout: { type: string, description: Detected layout when available; omitted otherwise. }
+        projection: { $ref: '#/components/schemas/Projection' }
+        effective_projection:
+          type: string
+          enum: [flat, '180', '360']
+          description: Resolved projection for the frontend player. Auto resolves to flat unless spherical metadata identifies 360-degree media.
+        projection_format:
+          type: string
+          enum: [equirectangular, cubemap]
+          description: Detected source texture format; explicit 360 defaults to equirectangular when metadata is missing.
+        caption: { type: string }
+        thumbnail_status: { type: string, enum: [ready, error] }
+        thumbnail_error: { type: string, description: Present when inspection or thumbnail generation failed. }
+        probe: { type: object, additionalProperties: true, description: 'Full FFprobe format/stream metadata, or an empty object on inspection failure.' }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        url: { type: string, description: Relative URL for the original file; its filename is already URL-encoded. }
+        thumbnail_url: { type: string, description: Relative versioned JPEG URL; omitted unless thumbnail_status is ready. }
+    MediaPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        caption: { type: string, description: At most 4096 UTF-8 bytes; an empty string clears it. }
+        stereo_layout: { $ref: '#/components/schemas/StereoLayout' }
+        projection: { $ref: '#/components/schemas/Projection' }
+    MediaScanResult:
+      type: object
+      required: [scanned, added, updated, unchanged, removed, skipped, failed]
+      properties:
+        scanned: { type: integer, minimum: 0 }
+        added: { type: integer, minimum: 0 }
+        updated: { type: integer, minimum: 0 }
+        unchanged: { type: integer, minimum: 0 }
+        removed: { type: integer, minimum: 0 }
+        skipped: { type: integer, minimum: 0 }
+        failed: { type: integer, minimum: 0, description: Indexing or thumbnail failures; may overlap added/updated counts. }
+    MediaStatus:
+      type: object
+      required: [total, photos, videos, thumbnails_ready, thumbnails_failed, max_upload_bytes, thumbnail_max_dimension]
+      properties:
+        total: { type: integer, format: int64, minimum: 0 }
+        photos: { type: integer, format: int64, minimum: 0 }
+        videos: { type: integer, format: int64, minimum: 0 }
+        thumbnails_ready: { type: integer, format: int64, minimum: 0 }
+        thumbnails_failed: { type: integer, format: int64, minimum: 0 }
+        max_upload_bytes: { type: integer, format: int64, minimum: 1, example: 17179869184 }
+        thumbnail_max_dimension: { type: integer, example: 640 }

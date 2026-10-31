@@ -19,12 +19,13 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const sqlSchemaVersion = 4
+const sqlSchemaVersion = 5
 
 type sqlStore struct {
 	db      *sql.DB
 	dialect string
 	path    string
+	media   *mediaLibrary
 }
 
 type migration struct {
@@ -120,6 +121,32 @@ var migrations = []migration{{
 }, {
 	version: 4,
 	run:     migrateFITFiles,
+}, {
+	version: 5,
+	statements: []string{`CREATE TABLE dive_media (
+		id TEXT PRIMARY KEY,
+		dive_id BIGINT NOT NULL REFERENCES dives(id) ON DELETE CASCADE,
+		filename TEXT NOT NULL,
+		kind TEXT NOT NULL,
+		content_type TEXT NOT NULL,
+		size_bytes BIGINT NOT NULL,
+		modified_ns BIGINT NOT NULL,
+		sha256 TEXT NOT NULL,
+		width INTEGER NOT NULL DEFAULT 0,
+		height INTEGER NOT NULL DEFAULT 0,
+		duration_seconds DOUBLE PRECISION NOT NULL DEFAULT 0,
+		stereo_layout TEXT NOT NULL DEFAULT 'auto',
+		detected_stereo_layout TEXT NOT NULL DEFAULT '',
+		projection TEXT NOT NULL DEFAULT 'auto',
+		caption TEXT NOT NULL DEFAULT '',
+		thumbnail_status TEXT NOT NULL,
+		thumbnail_error TEXT NOT NULL DEFAULT '',
+		thumbnail_key TEXT NOT NULL DEFAULT '',
+		probe_json TEXT NOT NULL DEFAULT '{}',
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL,
+		UNIQUE (dive_id, filename)
+	)`, `CREATE INDEX dive_media_dive_idx ON dive_media (dive_id, filename, id)`},
 }}
 
 func openSQLStore(ctx context.Context, dialect, endpoint string) (*sqlStore, error) {
