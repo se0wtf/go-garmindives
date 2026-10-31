@@ -226,6 +226,11 @@ Environment:
   GARMIN_API_ADDR     Listen address (default 127.0.0.1:8080)
   GARMIN_ASSETS_DIR   Media directory (default assets)
   GARMIN_MEDIA_MAX_UPLOAD_BYTES  Maximum upload bytes (default 17179869184)
+  DEEPL_API_KEY       Optional API key for cached French-to-English translations
+  DEEPL_TARGET_LANG   English locale: EN-GB (default) or EN-US
+  DEEPL_REQUEST_INTERVAL  Minimum DeepL request gap (default 2s)
+  DEEPL_API_URL       Optional DeepL origin; :fx keys select api-free.deepl.com
+  DEEPL_GLOSSARY_ID   Optional French-to-English DeepL glossary
   LOG_LEVEL           Console verbosity: debug, info, warn, error, or fatal`)
 	}
 	if err := flags.Parse(args); errors.Is(err, flag.ErrHelp) {
@@ -245,6 +250,10 @@ Environment:
 	if err != nil || maxUpload <= 0 || maxUpload > 1<<60 {
 		return errors.New("media upload limit must be a positive byte count no greater than 2^60")
 	}
+	translationConfig, err := translationConfigFromEnvironment()
+	if err != nil {
+		return err
+	}
 	store, err := openStore(ctx, kind, endpoint)
 	if err != nil {
 		return err
@@ -259,6 +268,14 @@ Environment:
 	if _, err := media.Scan(ctx, false); err != nil {
 		return fmt.Errorf("scan media assets: %w", err)
 	}
+	var translator textTranslator
+	if translationConfig.key != "" {
+		translator = newDeepLClient(translationConfig)
+	}
+	translations := newTranslationService(store, translationConfig, translator, logger)
+	store.translations = translations
+	translations.Start(ctx)
+	defer translations.Close()
 	return serve(ctx, strings.TrimSpace(*address), store, logger)
 }
 

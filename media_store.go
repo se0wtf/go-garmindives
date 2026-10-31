@@ -29,6 +29,7 @@ type mediaItem struct {
 	EffectiveProjection  string          `json:"effective_projection"`
 	ProjectionFormat     string          `json:"projection_format,omitempty"`
 	Caption              string          `json:"caption"`
+	Description          string          `json:"description"`
 	ThumbnailStatus      string          `json:"thumbnail_status"`
 	ThumbnailError       string          `json:"thumbnail_error,omitempty"`
 	ThumbnailKey         string          `json:"-"`
@@ -37,18 +38,19 @@ type mediaItem struct {
 	UpdatedAt            string          `json:"updated_at"`
 	URL                  string          `json:"url"`
 	ThumbnailURL         string          `json:"thumbnail_url,omitempty"`
+	Translations         translations    `json:"translations"`
 }
 
 const mediaColumns = `id, dive_id, filename, kind, content_type, size_bytes, modified_ns,
 	sha256, width, height, duration_seconds, stereo_layout, detected_stereo_layout,
-	projection, caption, thumbnail_status, thumbnail_error, thumbnail_key, probe_json, created_at, updated_at`
+	projection, caption, description, thumbnail_status, thumbnail_error, thumbnail_key, probe_json, created_at, updated_at`
 
 func scanMedia(row rowScanner) (mediaItem, error) {
 	var m mediaItem
 	var probe string
 	err := row.Scan(&m.ID, &m.DiveID, &m.Filename, &m.Kind, &m.ContentType, &m.SizeBytes,
 		&m.ModifiedNS, &m.SHA256, &m.Width, &m.Height, &m.DurationSeconds, &m.StereoLayout,
-		&m.DetectedStereoLayout, &m.Projection, &m.Caption, &m.ThumbnailStatus,
+		&m.DetectedStereoLayout, &m.Projection, &m.Caption, &m.Description, &m.ThumbnailStatus,
 		&m.ThumbnailError, &m.ThumbnailKey, &probe, &m.CreatedAt, &m.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return m, errMediaNotFound
@@ -141,23 +143,29 @@ func (s *sqlStore) mediaByFilename(ctx context.Context, diveID int64, name strin
 
 func (s *sqlStore) saveMedia(ctx context.Context, m mediaItem) error {
 	_, err := s.db.ExecContext(ctx, s.bind(`INSERT INTO dive_media (`+mediaColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (dive_id, filename) DO UPDATE SET kind=excluded.kind,
 		content_type=excluded.content_type, size_bytes=excluded.size_bytes, modified_ns=excluded.modified_ns,
 		sha256=excluded.sha256, width=excluded.width, height=excluded.height,
 		duration_seconds=excluded.duration_seconds, stereo_layout=excluded.stereo_layout,
 		detected_stereo_layout=excluded.detected_stereo_layout, projection=excluded.projection,
-		caption=excluded.caption, thumbnail_status=excluded.thumbnail_status,
+		caption=excluded.caption, description=excluded.description, thumbnail_status=excluded.thumbnail_status,
 		thumbnail_error=excluded.thumbnail_error, thumbnail_key=excluded.thumbnail_key,
 		probe_json=excluded.probe_json, updated_at=excluded.updated_at`),
 		m.ID, m.DiveID, m.Filename, m.Kind, m.ContentType, m.SizeBytes, m.ModifiedNS,
 		m.SHA256, m.Width, m.Height, m.DurationSeconds, m.StereoLayout, m.DetectedStereoLayout,
-		m.Projection, m.Caption, m.ThumbnailStatus, m.ThumbnailError, m.ThumbnailKey,
+		m.Projection, m.Caption, m.Description, m.ThumbnailStatus, m.ThumbnailError, m.ThumbnailKey,
 		string(m.Probe), m.CreatedAt, m.UpdatedAt)
+	if err == nil {
+		s.translationsChanged()
+	}
 	return err
 }
 
 func (s *sqlStore) removeMedia(ctx context.Context, m mediaItem) error {
 	_, err := s.db.ExecContext(ctx, s.bind(`DELETE FROM dive_media WHERE dive_id = ? AND id = ?`), m.DiveID, m.ID)
+	if err == nil {
+		s.translationsChanged()
+	}
 	return err
 }

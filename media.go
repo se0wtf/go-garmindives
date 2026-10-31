@@ -503,16 +503,20 @@ func (l *mediaLibrary) Delete(ctx context.Context, id int64, mediaID string) err
 
 type mediaPatch struct {
 	Caption      *string `json:"caption"`
+	Description  *string `json:"description"`
 	StereoLayout *string `json:"stereo_layout"`
 	Projection   *string `json:"projection"`
 }
 
 func (p mediaPatch) validate() error {
-	if p.Caption == nil && p.StereoLayout == nil && p.Projection == nil {
-		return errors.New("provide caption, stereo_layout, or projection")
+	if p.Caption == nil && p.Description == nil && p.StereoLayout == nil && p.Projection == nil {
+		return errors.New("provide caption, description, stereo_layout, or projection")
 	}
 	if p.Caption != nil && len(*p.Caption) > 4096 {
 		return errors.New("caption exceeds 4096 bytes")
+	}
+	if p.Description != nil && len(*p.Description) > 8192 {
+		return errors.New("description exceeds 8192 bytes")
 	}
 	if p.StereoLayout != nil {
 		switch *p.StereoLayout {
@@ -542,6 +546,9 @@ func (l *mediaLibrary) Patch(ctx context.Context, id int64, mediaID string, patc
 	old := m
 	if patch.Caption != nil {
 		m.Caption = *patch.Caption
+	}
+	if patch.Description != nil {
+		m.Description = *patch.Description
 	}
 	if patch.Projection != nil {
 		m.Projection = *patch.Projection

@@ -96,8 +96,8 @@ func TestMediaScanReconcilesFilesystemAndRetainsMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	caption, layout, projection := "Shark dive", "mono", "360"
-	m, err = l.Patch(ctx, 42, m.ID, mediaPatch{Caption: &caption, StereoLayout: &layout, Projection: &projection})
+	caption, description, layout, projection := "Shark dive", "A reef shark passing the group.", "mono", "360"
+	m, err = l.Patch(ctx, 42, m.ID, mediaPatch{Caption: &caption, Description: &description, StereoLayout: &layout, Projection: &projection})
 	if err != nil || p.layout != "mono" || p.projection != "360" || m.ThumbnailStatus != "ready" {
 		t.Fatalf("patch = %+v, %v", m, err)
 	}
@@ -109,7 +109,7 @@ func TestMediaScanReconcilesFilesystemAndRetainsMetadata(t *testing.T) {
 	writeTestMedia(t, l, "42/Panorama.mov", []byte("changed 360 video"))
 	r, err = l.Scan(ctx, false)
 	updated, lookupErr := l.store.mediaByID(ctx, 42, m.ID)
-	if err != nil || lookupErr != nil || r.Updated != 1 || updated.SHA256 == m.SHA256 || updated.Caption != caption || updated.StereoLayout != layout || updated.Projection != projection {
+	if err != nil || lookupErr != nil || r.Updated != 1 || updated.SHA256 == m.SHA256 || updated.Caption != caption || updated.Description != description || updated.StereoLayout != layout || updated.Projection != projection {
 		t.Fatalf("modified scan = %+v, media=%+v, err=%v/%v", r, updated, err, lookupErr)
 	}
 	if _, err := l.root.Stat(".thumbnails/" + m.ThumbnailKey + ".jpg"); !errors.Is(err, os.ErrNotExist) {
@@ -330,7 +330,8 @@ func TestMediaSurvivesRestartAndDoesNotReprocessUnchangedFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	caption := "Keep this caption"
-	m, err = l.Patch(ctx, 42, m.ID, mediaPatch{Caption: &caption})
+	description := "A turtle swimming above a coral garden."
+	m, err = l.Patch(ctx, 42, m.ID, mediaPatch{Caption: &caption, Description: &description})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,7 +352,7 @@ func TestMediaSurvivesRestartAndDoesNotReprocessUnchangedFiles(t *testing.T) {
 	next.processor = fake
 	r, err := next.Scan(ctx, false)
 	saved, lookupErr := reopened.mediaByID(ctx, 42, m.ID)
-	if err != nil || lookupErr != nil || r.Unchanged != 1 || fake.inspects.Load() != 0 || saved.Caption != caption || saved.SHA256 != m.SHA256 || saved.ThumbnailKey != m.ThumbnailKey {
+	if err != nil || lookupErr != nil || r.Unchanged != 1 || fake.inspects.Load() != 0 || saved.Caption != caption || saved.Description != description || saved.SHA256 != m.SHA256 || saved.ThumbnailKey != m.ThumbnailKey {
 		t.Fatalf("restart scan = %+v, saved=%+v, errors=%v/%v", r, saved, err, lookupErr)
 	}
 	// Removing a dive cascades the metadata. Originals stay on disk, allowing a
@@ -590,6 +591,7 @@ func TestMediaFFmpegPhotoVideoAndStereoThumbnails(t *testing.T) {
 }
 
 func TestRunServeScansAssetsBeforeListening(t *testing.T) {
+	clearDeepLEnvironment(t)
 	store, _ := openTestSQLStore(t)
 	if err := store.SaveDives(context.Background(), []DiveRecord{testSQLDive(t, 42)}); err != nil {
 		t.Fatal(err)

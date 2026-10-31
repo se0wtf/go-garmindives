@@ -94,6 +94,6 @@ func (s *apiServer) patchDive(w http.ResponseWriter, r *http.Request) {
 			}
 			s.logger.Info("dive cover updated", "activity_id", id, "cover_media_id", coverID)
 		}
-		writeJSON(w, http.StatusOK, item)
+		s.writeTranslatedJSON(w, r, http.StatusOK, &item)
 	}
 }

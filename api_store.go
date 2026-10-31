@@ -16,16 +16,20 @@ const diveSummaryColumns = `dives.id, dives.garmin_dive_id, dives.dive_number, d
 	dives.exit_latitude, dives.exit_longitude, dives.notes, dives.description, dives.duration_seconds,
 	dives.max_depth_meters, dives.average_depth_meters, dives.average_heart_rate, dives.max_heart_rate,
 	dives.min_temperature_celsius, dives.average_temperature_celsius, dives.max_temperature_celsius,
-	dives.cover_media_id, cover.id, cover.filename, cover.thumbnail_status, cover.thumbnail_key`
+	dives.cover_media_id, cover.id, cover.filename, cover.description, cover.caption, cover.thumbnail_status, cover.thumbnail_key,
+	dives.rating, dives.rating_max, dives.note_comment, dives.highlights_json`
 
 const diveSummaryFrom = `FROM dives LEFT JOIN dive_media AS cover
 	ON cover.id = dives.cover_media_id AND cover.dive_id = dives.id AND cover.kind = 'photo'`
 
 type diveCoverPhoto struct {
-	ID           string `json:"id"`
-	Filename     string `json:"filename"`
-	URL          string `json:"url"`
-	ThumbnailURL string `json:"thumbnail_url,omitempty"`
+	ID           string       `json:"id"`
+	Filename     string       `json:"filename"`
+	Description  string       `json:"description"`
+	URL          string       `json:"url"`
+	ThumbnailURL string       `json:"thumbnail_url,omitempty"`
+	Translations translations `json:"translations"`
+	caption      string
 }
 
 type diveSummary struct {
@@ -45,6 +49,10 @@ type diveSummary struct {
 	ExitLongitude             *float64        `json:"exit_longitude,omitempty"`
 	Notes                     string          `json:"notes"`
 	Description               string          `json:"description"`
+	Rating                    *float64        `json:"rating"`
+	RatingMax                 *float64        `json:"rating_max"`
+	Comment                   string          `json:"comment"`
+	Highlights                []string        `json:"highlights"`
 	DurationSeconds           *float64        `json:"duration_seconds,omitempty"`
 	MaxDepthMeters            *float64        `json:"max_depth_meters,omitempty"`
 	AverageDepthMeters        *float64        `json:"average_depth_meters,omitempty"`
@@ -55,6 +63,7 @@ type diveSummary struct {
 	MaxTemperatureCelsius     *float64        `json:"max_temperature_celsius,omitempty"`
 	CoverMediaID              *string         `json:"cover_media_id"`
 	CoverPhoto                *diveCoverPhoto `json:"cover_photo"`
+	Translations              translations    `json:"translations"`
 }
 
 type diveListOptions struct {
@@ -128,16 +137,18 @@ func scanDiveSummary(row rowScanner) (diveSummary, error) {
 	if err != nil {
 		return diveSummary{}, fmt.Errorf("read dive for API: %w", err)
 	}
-	return values.summary(), nil
+	return values.summary()
 }
 
 type diveSummaryScan struct {
-	item                                                        diveSummary
-	garminDiveID, diveNumber                                    sql.NullInt64
-	entryLatitude, entryLongitude, exitLatitude, exitLongitude  sql.NullFloat64
-	duration, maxDepth, averageDepth, averageHR, maxHR          sql.NullFloat64
-	minTemperature, averageTemperature, maxTemperature          sql.NullFloat64
-	coverMediaID, coverID, coverFilename, coverStatus, coverKey sql.NullString
+	item                                                                                        diveSummary
+	garminDiveID, diveNumber                                                                    sql.NullInt64
+	entryLatitude, entryLongitude, exitLatitude, exitLongitude                                  sql.NullFloat64
+	duration, maxDepth, averageDepth, averageHR, maxHR                                          sql.NullFloat64
+	minTemperature, averageTemperature, maxTemperature                                          sql.NullFloat64
+	coverMediaID, coverID, coverFilename, coverDescription, coverCaption, coverStatus, coverKey sql.NullString
+	rating, ratingMax                                                                           sql.NullFloat64
+	highlightsJSON                                                                              string
 }
 
 func newDiveSummaryScan() *diveSummaryScan { return &diveSummaryScan{} }
@@ -149,13 +160,21 @@ func (v *diveSummaryScan) targets(extra ...any) []any {
 		&v.entryLatitude, &v.entryLongitude, &v.exitLatitude, &v.exitLongitude,
 		&v.item.Notes, &v.item.Description, &v.duration, &v.maxDepth, &v.averageDepth, &v.averageHR, &v.maxHR,
 		&v.minTemperature, &v.averageTemperature, &v.maxTemperature,
-		&v.coverMediaID, &v.coverID, &v.coverFilename, &v.coverStatus, &v.coverKey,
+		&v.coverMediaID, &v.coverID, &v.coverFilename, &v.coverDescription, &v.coverCaption, &v.coverStatus, &v.coverKey,
+		&v.rating, &v.ratingMax, &v.item.Comment, &v.highlightsJSON,
 	}
 	return append(targets, extra...)
 }
 
-func (v *diveSummaryScan) summary() diveSummary {
+func (v *diveSummaryScan) summary() (diveSummary, error) {
 	item := v.item
+	item.Rating, item.RatingMax = nullFloatPointer(v.rating), nullFloatPointer(v.ratingMax)
+	if err := json.Unmarshal([]byte(v.highlightsJSON), &item.Highlights); err != nil {
+		return diveSummary{}, fmt.Errorf("read dive highlights: %w", err)
+	}
+	if item.Highlights == nil {
+		item.Highlights = []string{}
+	}
 	item.GarminDiveID = nullInt64Pointer(v.garminDiveID)
 	if v.diveNumber.Valid {
 		value := int(v.diveNumber.Int64)
@@ -180,9 +199,9 @@ func (v *diveSummaryScan) summary() diveSummary {
 		media := mediaItem{ID: v.coverID.String, DiveID: item.ID, Filename: v.coverFilename.String,
 			ThumbnailStatus: v.coverStatus.String, ThumbnailKey: v.coverKey.String}
 		media.setURLs()
-		item.CoverPhoto = &diveCoverPhoto{ID: media.ID, Filename: media.Filename, URL: media.URL, ThumbnailURL: media.ThumbnailURL}
+		item.CoverPhoto = &diveCoverPhoto{ID: media.ID, Filename: media.Filename, Description: v.coverDescription.String, URL: media.URL, ThumbnailURL: media.ThumbnailURL, caption: v.coverCaption.String}
 	}
-	return item
+	return item, nil
 }
 
 type diveDetail struct {
@@ -275,7 +294,7 @@ func scanDiveSummaryWithDocuments(row rowScanner, activity, activityDetails, div
 	if err != nil {
 		return diveSummary{}, err
 	}
-	return values.summary(), nil
+	return values.summary()
 }
 
 type diveSampleAPIResponse struct {

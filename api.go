@@ -59,6 +59,7 @@ func newAPIHandler(store *sqlStore, logger *charmLog.Logger) http.Handler {
 	server := &apiServer{store: store, logger: logger}
 	mux := http.NewServeMux()
 	registerDocumentationRoutes(mux)
+	server.registerTranslationRoutes(mux)
 	mux.HandleFunc("GET /api/v1/health", server.health)
 	mux.HandleFunc("GET /api/v1/dives", server.listDives)
 	mux.HandleFunc("GET /api/v1/dives/{id}", server.getDive)
@@ -129,7 +130,7 @@ func (s *apiServer) listDives(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	writeJSON(w, http.StatusOK, response)
+	s.writeTranslatedJSON(w, r, http.StatusOK, &response)
 }
 
 func (s *apiServer) getDive(w http.ResponseWriter, r *http.Request) {
@@ -146,7 +147,7 @@ func (s *apiServer) getDive(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, dive)
+	s.writeTranslatedJSON(w, r, http.StatusOK, &dive)
 }
 
 func (s *apiServer) listSamples(w http.ResponseWriter, r *http.Request) {

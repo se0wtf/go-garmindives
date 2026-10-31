@@ -63,7 +63,7 @@ func TestOpenAPIDocumentsEveryAPIRoute(t *testing.T) {
 	routes := map[string]bool{}
 	// Read actual route registration, so new endpoints cannot silently be left
 	// out of the frontend contract. Documentation/static UI routes are excluded.
-	for _, filename := range []string{"api.go", "media_api.go"} {
+	for _, filename := range []string{"api.go", "media_api.go", "translation_api.go"} {
 		file, err := parser.ParseFile(token.NewFileSet(), filename, nil, 0)
 		if err != nil {
 			t.Fatal(err)
@@ -168,6 +168,7 @@ func TestOpenAPISchemasMatchResponseFields(t *testing.T) {
 		"FITDocument": fitDocument{}, "FITFile": fitFile{}, "FITSequence": fitSequence{},
 		"FITMessage": fitMessage{}, "FITField": fitField{}, "ErrorResponse": errorResponse{},
 		"DiveCoverPhoto": diveCoverPhoto{},
+		"Translations":   translations{}, "EnglishTranslation": englishTranslation{}, "TranslationStatus": translationStatus{},
 	} {
 		t.Run(name, func(t *testing.T) {
 			schema := openAPIObject(t, schemas[name])

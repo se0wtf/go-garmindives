@@ -24,9 +24,11 @@ tags:
   - name: Dives
     description: Dive summaries, source documents, FIT data, and graph samples
   - name: Media
-    description: Photos, videos, 360-degree projection metadata, captions, and filesystem indexing
+    description: Photos, videos, descriptions, 360-degree projection metadata, captions, and filesystem indexing
   - name: Assets
     description: Original media and JPEG thumbnails with range/conditional requests
+  - name: Translations
+    description: Background French-to-English translation, cached in the local database
 
 paths:
   /api/v1/health:
@@ -231,10 +233,11 @@ paths:
     patch:
       tags: [Media]
       operationId: updateDiveMedia
-      summary: Update caption or 360-degree projection settings
+      summary: Update description, caption, or 360-degree projection settings
       description: |
-        Provide at least one field. Omitted fields are kept. An empty caption
-        clears it. Changing projection or stereo_layout regenerates the JPEG
+        Provide at least one field. Omitted fields are kept. An empty description
+        or caption clears that field. Descriptions describe what the photo/video
+        shows and can contain up to 8192 UTF-8 bytes. Changing projection or stereo_layout regenerates the JPEG
         thumbnail. Use projection="360" for an untagged stitched equirectangular
         video, "flat" to disable spherical playback, or "auto" to use detected
         metadata. Originals are never converted or modified.
@@ -243,7 +246,7 @@ paths:
         content:
           application/json:
             schema: { $ref: '#/components/schemas/MediaPatch' }
-            example: { caption: Reef wall panorama, projection: '360' }
+            example: { caption: Reef wall panorama, description: 'A sea turtle swimming above the reef near the end of the dive.', projection: '360' }
       responses:
         '200':
           description: Updated media metadata and thumbnail status.
@@ -402,6 +405,43 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/MediaStatus' }
               example: { total: 12, photos: 10, videos: 2, thumbnails_ready: 11, thumbnails_failed: 1, max_upload_bytes: 17179869184, thumbnail_max_dimension: 640 }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/translations/status:
+    get:
+      tags: [Translations]
+      operationId: getTranslationStatus
+      summary: Read English translation progress and configuration
+      description: Counts refer to unique active note/media text revisions. Cached revisions also includes older versions retained for reuse. Empty text needs no provider request.
+      responses:
+        '200':
+          description: Translation worker status; no API key or source text is exposed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TranslationStatus' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/translations/retry:
+    post:
+      tags: [Translations]
+      operationId: retryTranslations
+      summary: Retry failed English translations and resume a blocked worker
+      description: Requeues failed entries and clears an authentication/quota pause. Ready cached translations are preserved. Correct credentials require restarting serve with the new DEEPL_API_KEY; retry after increasing a provider quota to resume without restarting.
+      responses:
+        '202':
+          description: Retries queued for background processing.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, enum: [queued] }
+        '503':
+          description: Translation disabled; configure DEEPL_API_KEY and restart serve.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
         '500': { $ref: '#/components/responses/InternalError' }
 
 components:
@@ -586,7 +626,7 @@ components:
         next_cursor: { type: string, description: Omitted on the last page. }
     DiveSummary:
       type: object
-      required: [id, name, activity_type, dive_type, start_time, local_date, timezone, location, notes, description, cover_media_id, cover_photo]
+      required: [id, name, activity_type, dive_type, start_time, local_date, timezone, location, notes, description, rating, rating_max, comment, highlights, cover_media_id, cover_photo, translations]
       properties:
         id: { type: integer, format: int64, description: Garmin activity ID. }
         garmin_dive_id: { type: integer, format: int64, description: Separate identifier from Garmin Dive when available. }
@@ -602,8 +642,32 @@ components:
         entry_longitude: { type: number, format: double }
         exit_latitude: { type: number, format: double }
         exit_longitude: { type: number, format: double }
-        notes: { type: string }
-        description: { type: string }
+        notes: { type: string, description: Original stored Garmin Dive note; preserved verbatim. }
+        description: { type: string, description: Original stored activity description; Personal API notes can be stored here. }
+        rating:
+          type: number
+          format: double
+          nullable: true
+          minimum: 0
+          description: Score parsed from a line such as N:4/5. Null when missing or invalid; a recorded zero is preserved.
+          example: 4
+        rating_max:
+          type: number
+          format: double
+          nullable: true
+          minimum: 0
+          exclusiveMinimum: true
+          description: Explicit rating denominator. Null when the rating is missing/invalid or no denominator was provided. Ratings are not normalized.
+          example: 5
+        comment:
+          type: string
+          description: Multiline text in Commentaire sections. Newlines are normalized and outer whitespace trimmed; empty when absent.
+          example: "Enfin pu faire la passe !\nOn parle de canyons mais ce sont plus des tranchés que des vrais canyons."
+        highlights:
+          type: array
+          description: Nonempty lines in HL sections, in original order. Optional list bullets are removed; empty when absent.
+          items: { type: string }
+          example: [Pleiiin de requins vers les 50m, Raies aigles, Requin dormeur]
         duration_seconds: { type: number, format: double }
         max_depth_meters: { type: number, format: double }
         average_depth_meters: { type: number, format: double }
@@ -617,16 +681,19 @@ components:
           nullable: true
           description: Selected photo attachment ID; null when no cover is selected.
         cover_photo: { $ref: '#/components/schemas/DiveCoverPhoto' }
+        translations: { $ref: '#/components/schemas/Translations' }
     DiveCoverPhoto:
       type: object
       nullable: true
       description: Lightweight cover photo included in lists and dive summaries. Null when no cover is selected; use thumbnail_url when present or fall back to url.
-      required: [id, filename, url]
+      required: [id, filename, description, url, translations]
       properties:
         id: { type: string, description: Selected photo attachment ID. }
         filename: { type: string, description: Original photo filename. }
+        description: { type: string, description: User-provided description of the photo; empty when unset. }
         url: { type: string, description: Relative URL of the original photo. }
         thumbnail_url: { type: string, description: Relative versioned JPEG thumbnail URL; omitted if processing failed. }
+        translations: { $ref: '#/components/schemas/Translations' }
     DivePatch:
       type: object
       additionalProperties: false
@@ -774,7 +841,7 @@ components:
       description: Defaults to auto for new media. Uses spherical metadata when present; explicit 360 denotes a stitched equirectangular export when no format metadata is available.
     MediaItem:
       type: object
-      required: [id, dive_id, filename, kind, content_type, size_bytes, sha256, width, height, duration_seconds, stereo_layout, projection, effective_projection, caption, thumbnail_status, probe, created_at, updated_at, url]
+      required: [id, dive_id, filename, kind, content_type, size_bytes, sha256, width, height, duration_seconds, stereo_layout, projection, effective_projection, caption, description, thumbnail_status, probe, created_at, updated_at, url, translations]
       properties:
         id: { type: string, description: Opaque attachment identifier. }
         dive_id: { type: integer, format: int64, description: Garmin activity ID. }
@@ -798,6 +865,7 @@ components:
           enum: [equirectangular, cubemap]
           description: Detected source texture format; explicit 360 defaults to equirectangular when metadata is missing.
         caption: { type: string }
+        description: { type: string, description: User-provided description of what the photo/video shows; empty when unset. }
         thumbnail_status: { type: string, enum: [ready, error] }
         thumbnail_error: { type: string, description: Present when inspection or thumbnail generation failed. }
         probe: { type: object, additionalProperties: true, description: 'Full FFprobe format/stream metadata, or an empty object on inspection failure.' }
@@ -805,12 +873,50 @@ components:
         updated_at: { type: string, format: date-time }
         url: { type: string, description: Relative URL for the original file; its filename is already URL-encoded. }
         thumbnail_url: { type: string, description: Relative versioned JPEG URL; omitted unless thumbnail_status is ready. }
+        translations: { $ref: '#/components/schemas/Translations' }
+    Translations:
+      type: object
+      required: [en]
+      description: French originals remain in the existing response fields. English is cached separately; request handlers never wait for the translation provider. Use French while en.status is not ready. Empty text is ready without a provider call.
+      properties:
+        en: { $ref: '#/components/schemas/EnglishTranslation' }
+    EnglishTranslation:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [pending, ready, error, disabled]
+          description: pending waits for background processing; ready exposes available English fields; error requires retry or provider recovery; disabled means no DEEPL_API_KEY and no cached result. Existing ready cache entries work without a key.
+        comment: { type: string, description: Translated dive comment; present only when ready and nonempty. }
+        highlights:
+          type: array
+          items: { type: string }
+          description: Translated dive highlights in the original order; present only when ready and nonempty.
+        caption: { type: string, description: Translated media caption; present only when ready and nonempty. }
+        description: { type: string, description: Translated media/cover description; present only when ready and nonempty. }
+        error: { type: string, description: Machine-readable provider/cache error code; credentials and upstream response text are never included. }
+    TranslationStatus:
+      type: object
+      required: [enabled, provider, source_language, target_language, target_locale, pending, ready, failed, cached_revisions]
+      properties:
+        enabled: { type: boolean, description: Whether a translation provider is configured for this running server. }
+        provider: { type: string, enum: [deepl] }
+        source_language: { type: string, enum: [fr] }
+        target_language: { type: string, enum: [en] }
+        target_locale: { type: string, enum: [EN-GB, EN-US] }
+        pending: { type: integer, format: int64, minimum: 0 }
+        ready: { type: integer, format: int64, minimum: 0 }
+        failed: { type: integer, format: int64, minimum: 0 }
+        cached_revisions: { type: integer, format: int64, minimum: 0 }
+        blocked_reason: { type: string, description: Authentication/quota error pausing provider calls until restart or explicit retry. }
     MediaPatch:
       type: object
       additionalProperties: false
       minProperties: 1
       properties:
         caption: { type: string, description: At most 4096 UTF-8 bytes; an empty string clears it. }
+        description: { type: string, description: At most 8192 UTF-8 bytes describing the photo/video; an empty string clears it. }
         stereo_layout: { $ref: '#/components/schemas/StereoLayout' }
         projection: { $ref: '#/components/schemas/Projection' }
     MediaScanResult:

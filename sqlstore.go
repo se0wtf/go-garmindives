@@ -19,13 +19,14 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const sqlSchemaVersion = 6
+const sqlSchemaVersion = 9
 
 type sqlStore struct {
-	db      *sql.DB
-	dialect string
-	path    string
-	media   *mediaLibrary
+	db           *sql.DB
+	dialect      string
+	path         string
+	media        *mediaLibrary
+	translations *translationService
 }
 
 type migration struct {
@@ -152,6 +153,40 @@ var migrations = []migration{{
 	statements: []string{
 		`ALTER TABLE dives ADD COLUMN cover_media_id TEXT REFERENCES dive_media(id) ON DELETE SET NULL`,
 		`CREATE INDEX dives_cover_media_idx ON dives (cover_media_id)`,
+	},
+}, {
+	version: 7,
+	statements: []string{
+		`ALTER TABLE dive_media ADD COLUMN description TEXT NOT NULL DEFAULT ''`,
+	},
+}, {
+	version: 8,
+	statements: []string{
+		`ALTER TABLE dives ADD COLUMN rating DOUBLE PRECISION CHECK (rating >= 0)`,
+		`ALTER TABLE dives ADD COLUMN rating_max DOUBLE PRECISION CHECK (rating_max > 0 AND rating <= rating_max)`,
+		`ALTER TABLE dives ADD COLUMN note_comment TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE dives ADD COLUMN highlights_json TEXT NOT NULL DEFAULT '[]'`,
+	},
+	run: migrateDiveNotes,
+}, {
+	version: 9,
+	statements: []string{
+		`CREATE TABLE translation_cache (
+			source_hash TEXT PRIMARY KEY,
+			profile TEXT NOT NULL,
+			source_json TEXT NOT NULL,
+			result_json TEXT NOT NULL DEFAULT '[]',
+			status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'ready', 'error')),
+			active INTEGER NOT NULL DEFAULT 1,
+			attempts INTEGER NOT NULL DEFAULT 0,
+			retry_at BIGINT NOT NULL DEFAULT 0,
+			last_error TEXT NOT NULL DEFAULT '',
+			lease_owner TEXT NOT NULL DEFAULT '',
+			lease_until BIGINT NOT NULL DEFAULT 0,
+			created_at BIGINT NOT NULL,
+			updated_at BIGINT NOT NULL
+		)`,
+		`CREATE INDEX translation_cache_work_idx ON translation_cache (profile, active, status, retry_at, lease_until)`,
 	},
 }}
 
@@ -667,17 +702,24 @@ func (s *sqlStore) SaveDives(ctx context.Context, records []DiveRecord) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit dives: %w", err)
 	}
+	s.translationsChanged()
 	return nil
 }
 
 func (s *sqlStore) insertDive(ctx context.Context, tx *sql.Tx, dive storedDive) (bool, error) {
+	parsed := parseDiveNotes(dive.Notes, dive.Description)
+	highlights, err := json.Marshal(parsed.Highlights)
+	if err != nil {
+		return false, fmt.Errorf("encode dive highlights: %w", err)
+	}
 	query := s.bind(`INSERT INTO dives (
 		id, garmin_dive_id, dive_number, name, activity_type, dive_type, start_time, local_date, timezone,
 		location, entry_latitude, entry_longitude, exit_latitude, exit_longitude, notes, description, duration_seconds,
 		max_depth_meters, average_depth_meters, average_heart_rate, max_heart_rate,
 		min_temperature_celsius, average_temperature_celsius, max_temperature_celsius,
-		activity_json, activity_details_json, dive_details_json, fit_json
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		activity_json, activity_details_json, dive_details_json, fit_json,
+		rating, rating_max, note_comment, highlights_json
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT (id) DO NOTHING`)
 	result, err := tx.ExecContext(ctx, query,
 		dive.ID, nullableInt64(dive.GarminDiveID), nullableInt(dive.DiveNumber), dive.Name, dive.ActivityType, dive.DiveType,
@@ -686,6 +728,7 @@ func (s *sqlStore) insertDive(ctx context.Context, tx *sql.Tx, dive storedDive) 
 		dive.MaxDepth, dive.AverageDepth, dive.AverageHeartRate, dive.MaxHeartRate,
 		dive.MinTemperature, dive.AverageTemperature, dive.MaxTemperature,
 		string(dive.ActivityJSON), string(dive.ActivityDetailsJSON), string(dive.DiveDetailsJSON), string(dive.FITJSON),
+		parsed.Rating, parsed.RatingMax, parsed.Comment, string(highlights),
 	)
 	if err != nil {
 		return false, fmt.Errorf("insert dive %d: %w", dive.ID, err)

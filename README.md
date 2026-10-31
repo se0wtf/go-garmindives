@@ -245,6 +245,128 @@ provides graph-ready elapsed time, depth, heart rate, temperature, gas, and
 decompression values. Dive details also include a `media` array with attachment
 metadata, original URLs, and available thumbnail URLs.
 
+Dive summaries in list/detail responses also include structured fields parsed
+from the stored Garmin note. For example:
+
+```text
+N:4/5
+Commentaire:
+Enfin pu faire la passe !
+On parle de canyons mais ce sont plus des tranchés que des vrais canyons.
+HL:
+Pleiiin de requins vers les 50m
+Raies aigles
+Requin dormeur
+```
+
+Produces:
+
+```json
+{
+  "rating": 4,
+  "rating_max": 5,
+  "comment": "Enfin pu faire la passe !\nOn parle de canyons mais ce sont plus des tranchés que des vrais canyons.",
+  "highlights": ["Pleiiin de requins vers les 50m", "Raies aigles", "Requin dormeur"]
+}
+```
+
+`N`, `Commentaire`/`Commentaires`, and `HL` labels are case-insensitive and may
+appear in any order. Comments retain internal line breaks; highlights are one
+nonempty line per item, with optional `-`, `*`, or `•` list bullets removed.
+Decimal ratings accept a dot or French comma. A score without a denominator,
+such as `N:4`, has `rating_max: null`; no scale is assumed or normalized.
+Missing/invalid ratings are `null`, missing comments are `""`, and missing
+highlights are `[]`. Zero is a valid rating. Unstructured text stays available
+in the original `notes` and `description` fields.
+
+The parser uses legacy `notes` first and falls back per section to the activity
+`description`, which contains notes in the Personal API. Raw source text is
+preserved. Existing records are backfilled locally when the database opens after
+upgrade, without downloading dives again. As with other stored dive metadata,
+these fields reflect the imported text; normal incremental sync does not refresh
+later edits made on Garmin.
+
+### French and English translations
+
+Set a DeepL API key when starting the REST server to automatically translate dive
+comments/highlights and media captions/descriptions from French into English:
+
+```sh
+export DEEPL_API_KEY='your-deepl-api-key'
+go-garmindives serve
+```
+
+The existing text fields remain French. List/detail, upload, and metadata-update
+responses also contain `translations.en`, for example:
+
+```json
+{
+  "comment": "Enfin pu faire la passe !",
+  "translations": {
+    "en": {
+      "status": "ready",
+      "comment": "Finally got to dive the pass!",
+      "highlights": ["Eagle rays", "Sharks"]
+    }
+  }
+}
+```
+
+An English block has status `pending`, `ready`, `error`, or `disabled`. While it
+is not ready, the frontend should show the French fields. Empty translated fields
+are omitted; empty source content is ready immediately without a provider request.
+Cover photo descriptions include the same English block in the dive list.
+
+A background worker discovers existing text at startup and reacts to media edits
+and uploads. It also checks for changes every 30 seconds, including new dives
+written by a separate sync process. API requests only read the cache and never
+wait for DeepL. The default **2-second gap** between translation requests is
+independent of Garmin's limiter. Temporary failures retry up to five consecutive
+attempts with backoff, respecting `Retry-After`; authentication errors and exhausted
+provider quotas pause calls until restart or explicit retry. Individual requests
+time out after 30 seconds and shutdown cancels ongoing processing.
+
+The `translation_cache` SQL table stores source/result text and work state.
+Identical note/media content with the same locale and glossary reuses a cached
+result. Changing French text selects a new content hash, so old English is never
+shown for a newer source. Completed batches are persisted separately, allowing
+retries to resume without translating successful batches again. Older completed
+revisions remain reusable if text is restored. Unreferenced pending revisions
+are skipped. Cached English continues to work after a restart even without a key.
+Original files, ratings, and raw Garmin documents are not sent to the provider.
+Only parsed comments/highlights and media captions/descriptions are translated.
+
+Configuration through the environment:
+
+| Variable | Default / purpose |
+| --- | --- |
+| `DEEPL_API_KEY` | Optional; enables provider calls; never stored or logged |
+| `DEEPL_TARGET_LANG` | `EN-GB`; also accepts `EN-US` |
+| `DEEPL_REQUEST_INTERVAL` | `2s`; any positive Go duration |
+| `DEEPL_API_URL` | `https://api-free.deepl.com` for keys ending in `:fx`, otherwise `https://api.deepl.com`; override with the origin shown for your API account |
+| `DEEPL_GLOSSARY_ID` | Optional French-to-English glossary for recurring dive/species names |
+
+The source language is fixed to `FR`. Requests include surrounding French prose
+and scuba-diving context to help disambiguate short highlights. See the official
+[DeepL translation API](https://developers.deepl.com/api-reference/translate/request-translation)
+and [authentication documentation](https://developers.deepl.com/docs/getting-started/auth).
+No real provider calls are made by the default test suite.
+
+- `GET /api/v1/translations/status` reports enabled state, locale, active pending/
+  ready/error counts, cached revision count, and any quota/authentication pause.
+- `POST /api/v1/translations/retry` requeues failed work and clears the pause,
+  preserving ready entries. With no API key it returns `503 translation_disabled`.
+
+Large notes are divided into batches of at most 50 nonempty text segments and
+120 KiB per request, with progress saved after each batch. A single text segment
+that exceeds the request limit has `translation_text_too_large` status and stays
+available in French. Account usage limits and billing are managed by DeepL; the
+app does not upgrade plans automatically. Cache reuse minimizes repeated usage,
+but a network failure after provider processing or failure to persist a response
+can still consume quota on retry.
+
+### Cover photos
+
 Select a cover photo using the ID returned by the media API:
 
 ```sh
@@ -262,6 +384,7 @@ object in each item, and the dive detail's `dive` summary contains the same fiel
   "cover_photo": {
     "id": "MEDIA_ID",
     "filename": "Turtle.jpeg",
+    "description": "A sea turtle swimming above the reef.",
     "url": "/assets/123456789/Turtle.jpeg",
     "thumbnail_url": "/api/v1/dives/123456789/media/MEDIA_ID/thumbnail?v=VERSION"
   }
@@ -330,7 +453,7 @@ The media APIs have no authentication, as with the existing dive API:
 | `POST /api/v1/dives/{id}/media` | Upload one multipart file, field name `file` |
 | `GET /api/v1/dives/{id}/media` | List media, sorted by filename; `limit` defaults to 50 (maximum 100), with an opaque `cursor` |
 | `GET /api/v1/dives/{id}/media/{mediaID}` | Read attachment metadata |
-| `PATCH /api/v1/dives/{id}/media/{mediaID}` | Update caption or 360-degree projection settings |
+| `PATCH /api/v1/dives/{id}/media/{mediaID}` | Update description, caption, or 360-degree projection settings |
 | `DELETE /api/v1/dives/{id}/media/{mediaID}` | Delete the original, thumbnail, and metadata |
 | `GET /api/v1/dives/{id}/media/{mediaID}/thumbnail` | Serve the JPEG thumbnail |
 | `GET /assets/{activityID}/{original filename}` | Serve the original; URL-encode the filename |
@@ -346,7 +469,7 @@ curl -F 'file=@/path/to/Turtle original.jpeg' \
 curl -X POST http://127.0.0.1:8080/api/v1/media/scan
 
 curl -X PATCH -H 'Content-Type: application/json' \
-  -d '{"caption":"Reef wall panorama","projection":"360"}' \
+  -d '{"caption":"Reef wall panorama","description":"A sea turtle swimming above the reef near the end of the dive.","projection":"360"}' \
   http://127.0.0.1:8080/api/v1/dives/123456789/media/MEDIA_ID
 ```
 
@@ -359,13 +482,20 @@ upload limit is **16 GiB**, configurable with `-media-max-upload-bytes` or
 imports have no upload-size limit. Uploads have a one-hour request read deadline.
 
 Media objects include `id`, `dive_id`, `filename`, `kind`, `content_type`,
-`size_bytes`, `sha256`, `width`, `height`, `duration_seconds`, `caption`,
+`size_bytes`, `sha256`, `width`, `height`, `duration_seconds`, `caption`, `description`,
 `projection`, `effective_projection`, optional `projection_format`, timestamps, `probe`, `url`,
 and `thumbnail_status` (`ready` or `error`). A successful thumbnail adds
 `thumbnail_url`; a failed inspection or thumbnail adds `thumbnail_error` instead.
 Originals are still accepted and served when tools/codecs are missing; install
 the tools and rescan to retry. Thumbnails are JPEG images with a maximum dimension
 of 640 pixels, stored separately under `assets/.thumbnails`.
+
+Use `description` to explain what a photo or video shows. It accepts up to 8192
+UTF-8 bytes and defaults to an empty string. Edit it through the media PATCH
+endpoint; omit it to keep the current text, or send `"description":""` to clear it.
+Descriptions are returned by media list/detail and dive detail endpoints, and
+selected cover photos include their description in the dive list. Descriptions
+persist across filesystem rescans, changed originals, synchronization, and restarts.
 
 Original and thumbnail endpoints support `HEAD`, HTTP byte ranges for video
 seeking, ETags, and conditional requests. Directory browsing is disabled. If an

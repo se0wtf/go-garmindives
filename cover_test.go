@@ -217,11 +217,19 @@ func TestDiveCoverMigratesExistingVersionFiveDatabase(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := old.SaveDives(ctx, []DiveRecord{testSQLDive(t, 42)}); err != nil {
+	if _, err := db.Exec(`INSERT INTO dives
+		(id, name, activity_type, dive_type, start_time, timezone, location, notes,
+		description, activity_json, activity_details_json, dive_details_json, fit_json)
+		VALUES (42, 'Lagoon', 'single_gas_diving', '', '', '', '', '', '', '{}', '{}', '{}', 'null')`); err != nil {
 		t.Fatal(err)
 	}
-	media := mediaItem{ID: "existing-photo", DiveID: 42, Filename: "Kept.jpg", Kind: "photo", ContentType: "image/jpeg", SizeBytes: 5, SHA256: "retained", StereoLayout: "auto", Projection: "flat", ThumbnailStatus: "error", Probe: json.RawMessage(`{}`)}
-	if err := old.saveMedia(ctx, media); err != nil {
+	media := mediaItem{ID: "existing-photo", DiveID: 42, Filename: "Kept.jpg", Caption: "Original caption"}
+	// Seed the historical table directly: current saveMedia includes columns
+	// introduced after schema version 5.
+	if _, err := db.Exec(`INSERT INTO dive_media
+		(id, dive_id, filename, kind, content_type, size_bytes, modified_ns, sha256,
+		caption, thumbnail_status, probe_json, created_at, updated_at)
+		VALUES (?, ?, ?, 'photo', 'image/jpeg', 5, 0, 'retained', ?, 'error', '{}', '', '')`, media.ID, media.DiveID, media.Filename, media.Caption); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
@@ -233,7 +241,7 @@ func TestDiveCoverMigratesExistingVersionFiveDatabase(t *testing.T) {
 	}
 	defer store.Close()
 	dive, err := store.Dive(ctx, 42)
-	if err != nil || dive.Dive.CoverPhoto != nil || dive.Dive.CoverMediaID != nil || len(dive.Media) != 1 || dive.Media[0].Filename != media.Filename {
+	if err != nil || dive.Dive.CoverPhoto != nil || dive.Dive.CoverMediaID != nil || len(dive.Media) != 1 || dive.Media[0].Filename != media.Filename || dive.Media[0].Caption != media.Caption || dive.Media[0].Description != "" {
 		t.Fatalf("migration changed existing data: %+v, %v", dive, err)
 	}
 	if _, err := store.setDiveCover(ctx, 42, &media.ID); err != nil {

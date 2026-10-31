@@ -102,7 +102,7 @@ func (s *apiServer) listMedia(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	writeJSON(w, http.StatusOK, response)
+	s.writeTranslatedJSON(w, r, http.StatusOK, &response)
 }
 
 func (s *apiServer) getMedia(w http.ResponseWriter, r *http.Request) {
@@ -115,7 +115,7 @@ func (s *apiServer) getMedia(w http.ResponseWriter, r *http.Request) {
 		s.mediaError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, m)
+	s.writeTranslatedJSON(w, r, http.StatusOK, &m)
 }
 
 func (s *apiServer) uploadMedia(w http.ResponseWriter, r *http.Request) {
@@ -166,7 +166,7 @@ func (s *apiServer) uploadMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Location", "/api/v1/dives/"+strconv.FormatInt(id, 10)+"/media/"+m.ID)
-	writeJSON(w, http.StatusCreated, m)
+	s.writeTranslatedJSON(w, r, http.StatusCreated, &m)
 }
 
 func (s *apiServer) patchMedia(w http.ResponseWriter, r *http.Request) {
@@ -174,7 +174,7 @@ func (s *apiServer) patchMedia(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+	r.Body = http.MaxBytesReader(w, r.Body, 128<<10)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	var patch mediaPatch
@@ -196,7 +196,7 @@ func (s *apiServer) patchMedia(w http.ResponseWriter, r *http.Request) {
 		s.mediaError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, m)
+	s.writeTranslatedJSON(w, r, http.StatusOK, &m)
 }
 
 func (s *apiServer) deleteMedia(w http.ResponseWriter, r *http.Request) {
