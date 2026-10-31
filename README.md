@@ -226,6 +226,7 @@ The versioned endpoints are:
 - `GET /api/v1/health`
 - `GET /api/v1/dives`
 - `GET /api/v1/dives/{id}`
+- `PATCH /api/v1/dives/{id}`
 - `GET /api/v1/dives/{id}/samples`
 
 Dive lists are newest-first and accept `limit` (default 50, maximum 100), an
@@ -243,6 +244,36 @@ Garmin JSON documents, the complete `fit` document, record metadata, and alerts;
 provides graph-ready elapsed time, depth, heart rate, temperature, gas, and
 decompression values. Dive details also include a `media` array with attachment
 metadata, original URLs, and available thumbnail URLs.
+
+Select a cover photo using the ID returned by the media API:
+
+```sh
+curl -X PATCH -H 'Content-Type: application/json' \
+  -d '{"cover_media_id":"MEDIA_ID"}' \
+  http://127.0.0.1:8080/api/v1/dives/123456789
+```
+
+`GET /api/v1/dives` includes `cover_media_id` and a lightweight `cover_photo`
+object in each item, and the dive detail's `dive` summary contains the same fields:
+
+```json
+{
+  "cover_media_id": "MEDIA_ID",
+  "cover_photo": {
+    "id": "MEDIA_ID",
+    "filename": "Turtle.jpeg",
+    "url": "/assets/123456789/Turtle.jpeg",
+    "thumbnail_url": "/api/v1/dives/123456789/media/MEDIA_ID/thumbnail?v=VERSION"
+  }
+}
+```
+
+The frontend can use `cover_photo.thumbnail_url`, falling back to `cover_photo.url`
+when thumbnail generation failed. Both cover fields are `null` when unset. Send
+`{"cover_media_id":null}` to clear the selection. Only a photo attached to that
+dive can be selected; invalid selections leave the previous cover unchanged.
+Garmin synchronization and media rescans preserve the choice. Deleting the photo
+through the API, or removing it from disk and rescanning, clears the cover.
 
 ## Photos and videos
 

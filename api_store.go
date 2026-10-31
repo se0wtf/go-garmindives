@@ -11,37 +11,50 @@ import (
 
 var errDiveNotFound = errors.New("dive not found")
 
-const diveSummaryColumns = `id, garmin_dive_id, dive_number, name, activity_type, dive_type,
-	start_time, local_date, timezone, location, entry_latitude, entry_longitude,
-	exit_latitude, exit_longitude, notes, description, duration_seconds,
-	max_depth_meters, average_depth_meters, average_heart_rate, max_heart_rate,
-	min_temperature_celsius, average_temperature_celsius, max_temperature_celsius`
+const diveSummaryColumns = `dives.id, dives.garmin_dive_id, dives.dive_number, dives.name, dives.activity_type, dives.dive_type,
+	dives.start_time, dives.local_date, dives.timezone, dives.location, dives.entry_latitude, dives.entry_longitude,
+	dives.exit_latitude, dives.exit_longitude, dives.notes, dives.description, dives.duration_seconds,
+	dives.max_depth_meters, dives.average_depth_meters, dives.average_heart_rate, dives.max_heart_rate,
+	dives.min_temperature_celsius, dives.average_temperature_celsius, dives.max_temperature_celsius,
+	dives.cover_media_id, cover.id, cover.filename, cover.thumbnail_status, cover.thumbnail_key`
+
+const diveSummaryFrom = `FROM dives LEFT JOIN dive_media AS cover
+	ON cover.id = dives.cover_media_id AND cover.dive_id = dives.id AND cover.kind = 'photo'`
+
+type diveCoverPhoto struct {
+	ID           string `json:"id"`
+	Filename     string `json:"filename"`
+	URL          string `json:"url"`
+	ThumbnailURL string `json:"thumbnail_url,omitempty"`
+}
 
 type diveSummary struct {
-	ID                        int64    `json:"id"`
-	GarminDiveID              *int64   `json:"garmin_dive_id,omitempty"`
-	DiveNumber                *int     `json:"dive_number,omitempty"`
-	Name                      string   `json:"name"`
-	ActivityType              string   `json:"activity_type"`
-	DiveType                  string   `json:"dive_type"`
-	StartTime                 string   `json:"start_time"`
-	LocalDate                 string   `json:"local_date"`
-	Timezone                  string   `json:"timezone"`
-	Location                  string   `json:"location"`
-	EntryLatitude             *float64 `json:"entry_latitude,omitempty"`
-	EntryLongitude            *float64 `json:"entry_longitude,omitempty"`
-	ExitLatitude              *float64 `json:"exit_latitude,omitempty"`
-	ExitLongitude             *float64 `json:"exit_longitude,omitempty"`
-	Notes                     string   `json:"notes"`
-	Description               string   `json:"description"`
-	DurationSeconds           *float64 `json:"duration_seconds,omitempty"`
-	MaxDepthMeters            *float64 `json:"max_depth_meters,omitempty"`
-	AverageDepthMeters        *float64 `json:"average_depth_meters,omitempty"`
-	AverageHeartRate          *float64 `json:"average_heart_rate,omitempty"`
-	MaxHeartRate              *float64 `json:"max_heart_rate,omitempty"`
-	MinTemperatureCelsius     *float64 `json:"min_temperature_celsius,omitempty"`
-	AverageTemperatureCelsius *float64 `json:"average_temperature_celsius,omitempty"`
-	MaxTemperatureCelsius     *float64 `json:"max_temperature_celsius,omitempty"`
+	ID                        int64           `json:"id"`
+	GarminDiveID              *int64          `json:"garmin_dive_id,omitempty"`
+	DiveNumber                *int            `json:"dive_number,omitempty"`
+	Name                      string          `json:"name"`
+	ActivityType              string          `json:"activity_type"`
+	DiveType                  string          `json:"dive_type"`
+	StartTime                 string          `json:"start_time"`
+	LocalDate                 string          `json:"local_date"`
+	Timezone                  string          `json:"timezone"`
+	Location                  string          `json:"location"`
+	EntryLatitude             *float64        `json:"entry_latitude,omitempty"`
+	EntryLongitude            *float64        `json:"entry_longitude,omitempty"`
+	ExitLatitude              *float64        `json:"exit_latitude,omitempty"`
+	ExitLongitude             *float64        `json:"exit_longitude,omitempty"`
+	Notes                     string          `json:"notes"`
+	Description               string          `json:"description"`
+	DurationSeconds           *float64        `json:"duration_seconds,omitempty"`
+	MaxDepthMeters            *float64        `json:"max_depth_meters,omitempty"`
+	AverageDepthMeters        *float64        `json:"average_depth_meters,omitempty"`
+	AverageHeartRate          *float64        `json:"average_heart_rate,omitempty"`
+	MaxHeartRate              *float64        `json:"max_heart_rate,omitempty"`
+	MinTemperatureCelsius     *float64        `json:"min_temperature_celsius,omitempty"`
+	AverageTemperatureCelsius *float64        `json:"average_temperature_celsius,omitempty"`
+	MaxTemperatureCelsius     *float64        `json:"max_temperature_celsius,omitempty"`
+	CoverMediaID              *string         `json:"cover_media_id"`
+	CoverPhoto                *diveCoverPhoto `json:"cover_photo"`
 }
 
 type diveListOptions struct {
@@ -58,24 +71,24 @@ func (s *sqlStore) ListDives(ctx context.Context, options diveListOptions) ([]di
 	conditions := []string{"1 = 1"}
 	var arguments []any
 	if options.From != "" {
-		conditions = append(conditions, "local_date >= ?")
+		conditions = append(conditions, "dives.local_date >= ?")
 		arguments = append(arguments, options.From)
 	}
 	if options.To != "" {
-		conditions = append(conditions, "local_date <= ?")
+		conditions = append(conditions, "dives.local_date <= ?")
 		arguments = append(arguments, options.To)
 	}
 	if options.Location != "" {
-		conditions = append(conditions, `LOWER(location) LIKE ? ESCAPE '\'`)
+		conditions = append(conditions, `LOWER(dives.location) LIKE ? ESCAPE '\'`)
 		arguments = append(arguments, "%"+escapeLikePattern(strings.ToLower(options.Location))+"%")
 	}
 	if options.AfterID != 0 {
-		conditions = append(conditions, `(local_date < ? OR
-			(local_date = ? AND (start_time < ? OR (start_time = ? AND id < ?))))`)
+		conditions = append(conditions, `(dives.local_date < ? OR
+			(dives.local_date = ? AND (dives.start_time < ? OR (dives.start_time = ? AND dives.id < ?))))`)
 		arguments = append(arguments, options.AfterDate, options.AfterDate, options.AfterTime, options.AfterTime, options.AfterID)
 	}
-	query := `SELECT ` + diveSummaryColumns + ` FROM dives WHERE ` + strings.Join(conditions, " AND ") +
-		` ORDER BY local_date DESC, start_time DESC, id DESC LIMIT ?`
+	query := `SELECT ` + diveSummaryColumns + ` ` + diveSummaryFrom + ` WHERE ` + strings.Join(conditions, " AND ") +
+		` ORDER BY dives.local_date DESC, dives.start_time DESC, dives.id DESC LIMIT ?`
 	arguments = append(arguments, options.Limit+1)
 	rows, err := s.db.QueryContext(ctx, s.bind(query), arguments...)
 	if err != nil {
@@ -119,11 +132,12 @@ func scanDiveSummary(row rowScanner) (diveSummary, error) {
 }
 
 type diveSummaryScan struct {
-	item                                                       diveSummary
-	garminDiveID, diveNumber                                   sql.NullInt64
-	entryLatitude, entryLongitude, exitLatitude, exitLongitude sql.NullFloat64
-	duration, maxDepth, averageDepth, averageHR, maxHR         sql.NullFloat64
-	minTemperature, averageTemperature, maxTemperature         sql.NullFloat64
+	item                                                        diveSummary
+	garminDiveID, diveNumber                                    sql.NullInt64
+	entryLatitude, entryLongitude, exitLatitude, exitLongitude  sql.NullFloat64
+	duration, maxDepth, averageDepth, averageHR, maxHR          sql.NullFloat64
+	minTemperature, averageTemperature, maxTemperature          sql.NullFloat64
+	coverMediaID, coverID, coverFilename, coverStatus, coverKey sql.NullString
 }
 
 func newDiveSummaryScan() *diveSummaryScan { return &diveSummaryScan{} }
@@ -135,6 +149,7 @@ func (v *diveSummaryScan) targets(extra ...any) []any {
 		&v.entryLatitude, &v.entryLongitude, &v.exitLatitude, &v.exitLongitude,
 		&v.item.Notes, &v.item.Description, &v.duration, &v.maxDepth, &v.averageDepth, &v.averageHR, &v.maxHR,
 		&v.minTemperature, &v.averageTemperature, &v.maxTemperature,
+		&v.coverMediaID, &v.coverID, &v.coverFilename, &v.coverStatus, &v.coverKey,
 	}
 	return append(targets, extra...)
 }
@@ -158,6 +173,15 @@ func (v *diveSummaryScan) summary() diveSummary {
 	item.MinTemperatureCelsius = nullFloatPointer(v.minTemperature)
 	item.AverageTemperatureCelsius = nullFloatPointer(v.averageTemperature)
 	item.MaxTemperatureCelsius = nullFloatPointer(v.maxTemperature)
+	if v.coverMediaID.Valid {
+		item.CoverMediaID = &v.coverMediaID.String
+	}
+	if v.coverID.Valid {
+		media := mediaItem{ID: v.coverID.String, DiveID: item.ID, Filename: v.coverFilename.String,
+			ThumbnailStatus: v.coverStatus.String, ThumbnailKey: v.coverKey.String}
+		media.setURLs()
+		item.CoverPhoto = &diveCoverPhoto{ID: media.ID, Filename: media.Filename, URL: media.URL, ThumbnailURL: media.ThumbnailURL}
+	}
 	return item
 }
 
@@ -180,7 +204,7 @@ type diveAlertAPIResponse struct {
 }
 
 func (s *sqlStore) Dive(ctx context.Context, id int64) (diveDetail, error) {
-	row := s.db.QueryRowContext(ctx, s.bind(`SELECT `+diveSummaryColumns+`, activity_json, activity_details_json, dive_details_json, fit_json FROM dives WHERE id = ?`), id)
+	row := s.db.QueryRowContext(ctx, s.bind(`SELECT `+diveSummaryColumns+`, dives.activity_json, dives.activity_details_json, dives.dive_details_json, dives.fit_json `+diveSummaryFrom+` WHERE dives.id = ?`), id)
 	var result diveDetail
 	var activity, activityDetails, diveDetails, fit string
 	item, err := scanDiveSummaryWithDocuments(row, &activity, &activityDetails, &diveDetails, &fit)

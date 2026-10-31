@@ -167,6 +167,7 @@ func TestOpenAPISchemasMatchResponseFields(t *testing.T) {
 		"MediaItem": mediaItem{}, "MediaList": mediaListResponse{}, "MediaScanResult": mediaScanResult{},
 		"FITDocument": fitDocument{}, "FITFile": fitFile{}, "FITSequence": fitSequence{},
 		"FITMessage": fitMessage{}, "FITField": fitField{}, "ErrorResponse": errorResponse{},
+		"DiveCoverPhoto": diveCoverPhoto{},
 	} {
 		t.Run(name, func(t *testing.T) {
 			schema := openAPIObject(t, schemas[name])

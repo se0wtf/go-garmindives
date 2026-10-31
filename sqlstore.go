@@ -19,7 +19,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const sqlSchemaVersion = 5
+const sqlSchemaVersion = 6
 
 type sqlStore struct {
 	db      *sql.DB
@@ -147,6 +147,12 @@ var migrations = []migration{{
 		updated_at TEXT NOT NULL,
 		UNIQUE (dive_id, filename)
 	)`, `CREATE INDEX dive_media_dive_idx ON dive_media (dive_id, filename, id)`},
+}, {
+	version: 6,
+	statements: []string{
+		`ALTER TABLE dives ADD COLUMN cover_media_id TEXT REFERENCES dive_media(id) ON DELETE SET NULL`,
+		`CREATE INDEX dives_cover_media_idx ON dives (cover_media_id)`,
+	},
 }}
 
 func openSQLStore(ctx context.Context, dialect, endpoint string) (*sqlStore, error) {

@@ -66,7 +66,7 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: A page of dive summaries. next_cursor is omitted on the last page.
+          description: A page of dive summaries including cover_photo URLs. next_cursor is omitted on the last page.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/DiveList' }
@@ -90,6 +90,38 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/DiveDetail' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    patch:
+      tags: [Dives]
+      operationId: updateDive
+      summary: Select or clear the dive's cover photo
+      description: |
+        Set cover_media_id to an existing photo attachment belonging to this dive.
+        Videos and attachments from other dives are rejected. Set it to null to
+        clear the cover. Selection persists across Garmin synchronization and
+        media scans. Deleting the selected photo clears the selection automatically.
+        The returned summary and dive list include cover_photo with original and
+        available thumbnail URLs; cover_photo is null when no cover is selected.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DivePatch' }
+            examples:
+              select:
+                summary: Choose an attached photo
+                value: { cover_media_id: 4f899e011d1c4c18b1034b9e5a335198 }
+              clear:
+                summary: Clear the cover
+                value: { cover_media_id: null }
+      responses:
+        '200':
+          description: Updated dive summary, including the selected cover photo or null.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DiveSummary' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '404': { $ref: '#/components/responses/NotFound' }
         '500': { $ref: '#/components/responses/InternalError' }
@@ -554,7 +586,7 @@ components:
         next_cursor: { type: string, description: Omitted on the last page. }
     DiveSummary:
       type: object
-      required: [id, name, activity_type, dive_type, start_time, local_date, timezone, location, notes, description]
+      required: [id, name, activity_type, dive_type, start_time, local_date, timezone, location, notes, description, cover_media_id, cover_photo]
       properties:
         id: { type: integer, format: int64, description: Garmin activity ID. }
         garmin_dive_id: { type: integer, format: int64, description: Separate identifier from Garmin Dive when available. }
@@ -580,6 +612,31 @@ components:
         min_temperature_celsius: { type: number, format: double }
         average_temperature_celsius: { type: number, format: double }
         max_temperature_celsius: { type: number, format: double }
+        cover_media_id:
+          type: string
+          nullable: true
+          description: Selected photo attachment ID; null when no cover is selected.
+        cover_photo: { $ref: '#/components/schemas/DiveCoverPhoto' }
+    DiveCoverPhoto:
+      type: object
+      nullable: true
+      description: Lightweight cover photo included in lists and dive summaries. Null when no cover is selected; use thumbnail_url when present or fall back to url.
+      required: [id, filename, url]
+      properties:
+        id: { type: string, description: Selected photo attachment ID. }
+        filename: { type: string, description: Original photo filename. }
+        url: { type: string, description: Relative URL of the original photo. }
+        thumbnail_url: { type: string, description: Relative versioned JPEG thumbnail URL; omitted if processing failed. }
+    DivePatch:
+      type: object
+      additionalProperties: false
+      required: [cover_media_id]
+      properties:
+        cover_media_id:
+          type: string
+          nullable: true
+          minLength: 1
+          description: Existing photo attachment ID for this dive. Use null to clear the cover.
     DiveDetail:
       type: object
       required: [dive, activity, activity_details, dive_details, fit, record_metadata, alerts, media]

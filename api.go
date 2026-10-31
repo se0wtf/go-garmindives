@@ -62,6 +62,7 @@ func newAPIHandler(store *sqlStore, logger *charmLog.Logger) http.Handler {
 	mux.HandleFunc("GET /api/v1/health", server.health)
 	mux.HandleFunc("GET /api/v1/dives", server.listDives)
 	mux.HandleFunc("GET /api/v1/dives/{id}", server.getDive)
+	mux.HandleFunc("PATCH /api/v1/dives/{id}", server.patchDive)
 	mux.HandleFunc("GET /api/v1/dives/{id}/samples", server.listSamples)
 	server.registerMediaRoutes(mux)
 	return apiMiddleware(mux)
