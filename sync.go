@@ -38,6 +38,107 @@ type activityDownloader interface {
 	DownloadActivity(context.Context, int64, garmin.DownloadFormat) ([]byte, error)
 }
 
+type activityGetter interface {
+	GetActivity(context.Context, int64) (json.RawMessage, error)
+}
+
+// syncDive refreshes one explicitly selected activity without listing history.
+// Cached FIT data is retained; only an absent FIT download is backfilled.
+func syncDive(ctx context.Context, client diveClient, archive *Archive, id int64, reportProgress func(int, int)) (int, error) {
+	if id <= 0 {
+		return 0, errors.New("activity ID must be positive")
+	}
+	var record DiveRecord
+	found := false
+	for _, stored := range archive.Dives {
+		if stored.ID == id {
+			record, found = stored, true
+			break
+		}
+	}
+	rawDive, err := client.GetDiveDetails(ctx, id)
+	if err != nil {
+		return 0, fmt.Errorf("get Garmin Dive details for dive %d: %w", id, err)
+	}
+	var personal personalDiveDocument
+	if err := json.Unmarshal(rawDive, &personal); err != nil {
+		return 0, fmt.Errorf("decode Garmin Dive details for dive %d: %w", id, err)
+	}
+	// The Personal API's dive response is already the full activity document.
+	// Reuse it instead of requesting the same endpoint a second time.
+	rawActivity := rawDive
+	if personal.ID == 0 {
+		getter, ok := client.(activityGetter)
+		if !ok {
+			return 0, errors.New("Garmin client does not support refreshing a single activity")
+		}
+		rawActivity, err = getter.GetActivity(ctx, id)
+		if err != nil {
+			return 0, fmt.Errorf("get activity %d: %w", id, err)
+		}
+	}
+	var activity struct {
+		ID           int64               `json:"activityId"`
+		Type         garmin.ActivityType `json:"activityType"`
+		PersonalType garmin.ActivityType `json:"activityTypeDTO"`
+	}
+	if err := json.Unmarshal(rawActivity, &activity); err != nil {
+		return 0, fmt.Errorf("decode activity %d: %w", id, err)
+	}
+	if activity.ID != id {
+		return 0, fmt.Errorf("Garmin returned a different activity for dive %d", id)
+	}
+	if !isDive(activity.Type) && !isDive(activity.PersonalType) {
+		return 0, fmt.Errorf("activity %d is not a supported dive", id)
+	}
+	activityDocument, err := rawDocument(rawActivity)
+	if err != nil {
+		return 0, fmt.Errorf("decode activity %d: %w", id, err)
+	}
+	diveDocument, err := rawDocument(rawDive)
+	if err != nil || diveDocument == nil {
+		return 0, fmt.Errorf("invalid Garmin Dive document for dive %d", id)
+	}
+	if !found && personal.ID == 0 {
+		rawDetails, err := client.GetActivityDetails(ctx, id, garmin.DetailOptions{
+			MaxChartSize: maxChartSize, MaxPolylineSize: maxPolylineSize,
+		})
+		if err != nil {
+			return 0, fmt.Errorf("get activity details for dive %d: %w", id, err)
+		}
+		record.ActivityDetails, err = rawDocument(rawDetails)
+		if err != nil {
+			return 0, fmt.Errorf("decode activity details for dive %d: %w", id, err)
+		}
+	}
+	if record.FIT == nil && !record.fitComplete {
+		if downloader, ok := client.(activityDownloader); ok {
+			body, err := downloader.DownloadActivity(ctx, id, garmin.Original)
+			if err != nil {
+				return 0, fmt.Errorf("download original FIT for dive %d: %w", id, err)
+			}
+			record.FIT, err = decodeFITDownload(ctx, body)
+			if err != nil {
+				return 0, fmt.Errorf("decode original FIT for dive %d: %w", id, err)
+			}
+		}
+	}
+	record.ID, record.Activity, record.DiveDetails = id, activityDocument, diveDocument
+	record.refreshMetadata = true
+	// Mutate the archive only after all requests and decoding have succeeded.
+	updated := make([]DiveRecord, 0, len(archive.Dives)+1)
+	for _, stored := range archive.Dives {
+		if stored.ID != id {
+			updated = append(updated, stored)
+		}
+	}
+	archive.Dives = append(updated, record)
+	if reportProgress != nil {
+		reportProgress(1, 1)
+	}
+	return 1, nil
+}
+
 func syncDives(ctx context.Context, client diveClient, archive *Archive, reportProgress func(int, int)) (int, error) {
 	activities, err := client.Activities(ctx, garmin.ListOptions{
 		Limit: divePageSize,

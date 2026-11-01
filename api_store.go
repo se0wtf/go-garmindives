@@ -6,10 +6,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
 var errDiveNotFound = errors.New("dive not found")
+
+func nullStringPointer(value sql.NullString) *string {
+	if !value.Valid {
+		return nil
+	}
+	copy := value.String
+	return &copy
+}
 
 const diveSummaryColumns = `dives.id, dives.garmin_dive_id, dives.dive_number, dives.name, dives.activity_type, dives.dive_type,
 	dives.start_time, dives.local_date, dives.timezone, dives.location, dives.entry_latitude, dives.entry_longitude,
@@ -17,7 +26,8 @@ const diveSummaryColumns = `dives.id, dives.garmin_dive_id, dives.dive_number, d
 	dives.max_depth_meters, dives.average_depth_meters, dives.average_heart_rate, dives.max_heart_rate,
 	dives.min_temperature_celsius, dives.average_temperature_celsius, dives.max_temperature_celsius,
 	dives.cover_media_id, cover.id, cover.filename, cover.description, cover.caption, cover.thumbnail_status, cover.thumbnail_key,
-	dives.rating, dives.rating_max, dives.note_comment, dives.highlights_json`
+	dives.rating, dives.rating_max, dives.note_comment, dives.highlights_json,
+	COALESCE(dives.country_override,dives.country_code,''),dives.country_code,dives.country_override,dives.trip_id,dives.trip_assignment`
 
 const diveSummaryFrom = `FROM dives LEFT JOIN dive_media AS cover
 	ON cover.id = dives.cover_media_id AND cover.dive_id = dives.id AND cover.kind = 'photo'`
@@ -64,6 +74,13 @@ type diveSummary struct {
 	CoverMediaID              *string         `json:"cover_media_id"`
 	CoverPhoto                *diveCoverPhoto `json:"cover_photo"`
 	Translations              translations    `json:"translations"`
+	Year                      *int            `json:"year"`
+	Country                   *country        `json:"country"`
+	DetectedCountry           *country        `json:"detected_country"`
+	CountryOverride           *string         `json:"country_override"`
+	CountrySource             string          `json:"country_source"`
+	TripID                    *string         `json:"trip_id"`
+	TripAssignment            string          `json:"trip_assignment"`
 }
 
 type diveListOptions struct {
@@ -71,6 +88,9 @@ type diveListOptions struct {
 	From      string
 	To        string
 	Location  string
+	Year      int
+	Country   string
+	TripID    string
 	AfterDate string
 	AfterTime string
 	AfterID   int64
@@ -79,6 +99,18 @@ type diveListOptions struct {
 func (s *sqlStore) ListDives(ctx context.Context, options diveListOptions) ([]diveSummary, bool, error) {
 	conditions := []string{"1 = 1"}
 	var arguments []any
+	if options.Year != 0 {
+		conditions = append(conditions, "dives.local_date >= ? AND dives.local_date <= ?")
+		arguments = append(arguments, fmt.Sprintf("%04d-01-01", options.Year), fmt.Sprintf("%04d-12-31", options.Year))
+	}
+	if options.Country != "" {
+		conditions = append(conditions, "COALESCE(dives.country_override,dives.country_code) = ?")
+		arguments = append(arguments, options.Country)
+	}
+	if options.TripID != "" {
+		conditions = append(conditions, "dives.trip_id = ?")
+		arguments = append(arguments, options.TripID)
+	}
 	if options.From != "" {
 		conditions = append(conditions, "dives.local_date >= ?")
 		arguments = append(arguments, options.From)
@@ -149,6 +181,7 @@ type diveSummaryScan struct {
 	coverMediaID, coverID, coverFilename, coverDescription, coverCaption, coverStatus, coverKey sql.NullString
 	rating, ratingMax                                                                           sql.NullFloat64
 	highlightsJSON                                                                              string
+	countryCode, detectedCountry, overrideCountry, tripID                                       sql.NullString
 }
 
 func newDiveSummaryScan() *diveSummaryScan { return &diveSummaryScan{} }
@@ -162,12 +195,27 @@ func (v *diveSummaryScan) targets(extra ...any) []any {
 		&v.minTemperature, &v.averageTemperature, &v.maxTemperature,
 		&v.coverMediaID, &v.coverID, &v.coverFilename, &v.coverDescription, &v.coverCaption, &v.coverStatus, &v.coverKey,
 		&v.rating, &v.ratingMax, &v.item.Comment, &v.highlightsJSON,
+		&v.countryCode, &v.detectedCountry, &v.overrideCountry, &v.tripID, &v.item.TripAssignment,
 	}
 	return append(targets, extra...)
 }
 
 func (v *diveSummaryScan) summary() (diveSummary, error) {
 	item := v.item
+	if len(item.LocalDate) >= 4 {
+		if year, err := strconv.Atoi(item.LocalDate[:4]); err == nil && year > 0 {
+			item.Year = &year
+		}
+	}
+	item.Country, item.DetectedCountry = countryByCode(v.countryCode.String), countryByCode(v.detectedCountry.String)
+	item.CountryOverride, item.TripID = nullStringPointer(v.overrideCountry), nullStringPointer(v.tripID)
+	item.CountrySource = "unknown"
+	if item.Country != nil {
+		item.CountrySource = "auto"
+	}
+	if v.overrideCountry.Valid {
+		item.CountrySource = "manual"
+	}
 	item.Rating, item.RatingMax = nullFloatPointer(v.rating), nullFloatPointer(v.ratingMax)
 	if err := json.Unmarshal([]byte(v.highlightsJSON), &item.Highlights); err != nil {
 		return diveSummary{}, fmt.Errorf("read dive highlights: %w", err)

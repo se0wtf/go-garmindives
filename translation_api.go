@@ -11,6 +11,7 @@ func (s *apiServer) registerTranslationRoutes(mux *http.ServeMux) {
 
 func (s *apiServer) writeTranslatedJSON(w http.ResponseWriter, r *http.Request, status int, value any) {
 	var targets []translationTarget
+	var finish []func()
 	addMedia := func(media *mediaItem) {
 		targets = append(targets, translationTarget{
 			source:      translationSource{Kind: "media", Caption: media.Caption, Description: media.Description},
@@ -28,6 +29,19 @@ func (s *apiServer) writeTranslatedJSON(w http.ResponseWriter, r *http.Request, 
 				destination: &dive.CoverPhoto.Translations.English, cover: true,
 			})
 		}
+	}
+	addTrip := func(t *diveTrip) {
+		targets = append(targets, translationTarget{source: t.translationSource(), destination: &t.Translations.English})
+		if t.CoverPhoto != nil {
+			addMedia(t.CoverPhoto)
+		}
+		finish = append(finish, func() {
+			if t.NameEN != "" {
+				t.Translations.English.Name = t.NameEN
+			} else if t.Translations.English.Status == "ready" {
+				t.NameEN = t.Translations.English.Name
+			}
+		})
 	}
 	switch response := value.(type) {
 	case *diveListResponse:
@@ -47,10 +61,27 @@ func (s *apiServer) writeTranslatedJSON(w http.ResponseWriter, r *http.Request, 
 		}
 	case *mediaItem:
 		addMedia(response)
+	case *diveTrip:
+		addTrip(response)
+	case *tripListResponse:
+		for i := range response.Items {
+			addTrip(&response.Items[i])
+		}
+	case *tripDetail:
+		addTrip(&response.Trip)
+		for i := range response.Media {
+			addMedia(&response.Media[i])
+		}
+		for i := range response.FavoriteDiveMedia {
+			addMedia(&response.FavoriteDiveMedia[i])
+		}
 	}
 	if err := s.store.translationService().populate(r.Context(), targets); err != nil {
 		s.internalError(w, r, err)
 		return
+	}
+	for _, complete := range finish {
+		complete()
 	}
 	writeJSON(w, status, value)
 }

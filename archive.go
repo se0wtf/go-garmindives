@@ -23,6 +23,7 @@ type DiveRecord struct {
 	DiveDetails     any          `yaml:"dive_details"`
 	FIT             *fitDocument `yaml:"fit,omitempty"`
 	fitComplete     bool
+	refreshMetadata bool
 }
 
 func newArchive() Archive {

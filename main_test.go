@@ -331,7 +331,7 @@ func TestSyncWithAuthenticationUsesCache(t *testing.T) {
 	added, err := syncWithAuthentication(context.Background(), &archive,
 		func() (diveClient, error) { return cached, nil },
 		func() (diveClient, error) { loginCalls++; return nil, nil },
-		testLogger(t),
+		testLogger(t), 0,
 	)
 	if err != nil || added != 0 || loginCalls != 0 {
 		t.Fatalf("added=%d loginCalls=%d err=%v", added, loginCalls, err)
@@ -345,7 +345,7 @@ func TestSyncWithAuthenticationLogsInWithoutCache(t *testing.T) {
 	_, err := syncWithAuthentication(context.Background(), &archive,
 		func() (diveClient, error) { return nil, garmin.ErrNoTokenFile },
 		func() (diveClient, error) { loginCalls++; return fresh, nil },
-		testLogger(t),
+		testLogger(t), 0,
 	)
 	if err != nil || loginCalls != 1 {
 		t.Fatalf("loginCalls=%d err=%v", loginCalls, err)
@@ -360,7 +360,7 @@ func TestSyncWithAuthenticationReauthenticatesExpiredSession(t *testing.T) {
 	_, err := syncWithAuthentication(context.Background(), &archive,
 		func() (diveClient, error) { return cached, nil },
 		func() (diveClient, error) { loginCalls++; return fresh, nil },
-		testLogger(t),
+		testLogger(t), 0,
 	)
 	if err != nil || loginCalls != 1 {
 		t.Fatalf("loginCalls=%d err=%v", loginCalls, err)
@@ -374,7 +374,7 @@ func TestSyncWithAuthenticationDoesNotHideCacheErrors(t *testing.T) {
 	_, err := syncWithAuthentication(context.Background(), &archive,
 		func() (diveClient, error) { return nil, wantErr },
 		func() (diveClient, error) { loginCalls++; return nil, nil },
-		testLogger(t),
+		testLogger(t), 0,
 	)
 	if !errors.Is(err, wantErr) || loginCalls != 0 {
 		t.Fatalf("loginCalls=%d err=%v", loginCalls, err)

@@ -76,6 +76,7 @@ func finishTranslations(t *testing.T, service *translationService) {
 
 func TestDeepLConfiguration(t *testing.T) {
 	clearDeepLEnvironment(t)
+	t.Setenv("GARMIN_GEOCODING_ENABLED", "false")
 	t.Setenv("DEEPL_API_KEY", "synthetic:fx")
 	config, err := translationConfigFromEnvironment()
 	if err != nil || config.endpoint != "https://api-free.deepl.com/v2/translate" || config.locale != "EN-GB" || config.interval != 2*time.Second {
@@ -487,6 +488,7 @@ func TestTranslationWorkerCancellationDoesNotBlockAPIReads(t *testing.T) {
 
 func TestRunServeStartsTranslationBackfillAndResumesFailedWork(t *testing.T) {
 	clearDeepLEnvironment(t)
+	t.Setenv("GARMIN_GEOCODING_ENABLED", "false")
 	store, _ := openTestSQLStore(t)
 	addFrenchTestDive(t, store, 100, "Commentaire: Beau récif")
 	seed := testTranslationService(t, store, nil)

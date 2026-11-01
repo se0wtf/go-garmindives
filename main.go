@@ -102,6 +102,7 @@ func runWithDependencies(ctx context.Context, args []string, output io.Writer, l
 	archivePath := flags.String("output", "dives.yaml", "path to the YAML dive archive (requires -output-type yaml)")
 	outputType := flags.String("output-type", envDefault("GARMIN_OUTPUT_TYPE", outputSQLite), "output type: sqlite, yaml, or postgres")
 	outputDSN := flags.String("output-dsn", strings.TrimSpace(os.Getenv("GARMIN_OUTPUT_DSN")), "SQL database path or PostgreSQL connection URL")
+	activityID := flags.Int64("activity-id", 0, "refresh only this Garmin dive activity ID, preserving cached FIT and local media")
 	tokenFile := "tokens.json"
 	if dependencies.personalAPIKey != "" {
 		tokenFile = "personal-tokens.json"
@@ -111,6 +112,7 @@ func runWithDependencies(ctx context.Context, args []string, output io.Writer, l
 		_, _ = fmt.Fprintln(output, `go-garmindives downloads every Garmin Connect dive into YAML or a SQL database.
 SQLite output defaults to dives.db in the current directory.
 Later runs download new dives and add FIT data to dives that do not have it yet.
+Use -activity-id to refresh one dive's metadata, including edited notes.
 
 Usage:
   go-garmindives [sync] [options]
@@ -142,6 +144,18 @@ Passwords and MFA codes are never written to disk.`)
 		return nil
 	} else if err != nil {
 		return err
+	}
+	var targeted bool
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "activity-id" {
+			targeted = true
+		}
+	})
+	if targeted && *activityID <= 0 {
+		return errors.New("activity ID must be positive")
+	}
+	if flags.NArg() != 0 {
+		return errors.New("unexpected positional arguments; use -activity-id to refresh one dive")
 	}
 	kind := strings.ToLower(strings.TrimSpace(*outputType))
 	endpoint := strings.TrimSpace(*outputDSN)
@@ -182,7 +196,10 @@ Passwords and MFA codes are never written to disk.`)
 	}
 	logger.Debug("stored dives loaded", "exists", existed, "dives", len(archive.Dives))
 	logger.Info("synchronizing Garmin dives", "output_type", config.Type, "output", config.logDestination())
-	added, err := syncWithAuthentication(ctx, &archive, loadCached, loginFresh, logger)
+	if targeted {
+		logger.Info("refreshing Garmin dive", "activity_id", *activityID)
+	}
+	added, err := syncWithAuthentication(ctx, &archive, loadCached, loginFresh, logger, *activityID)
 	if err != nil {
 		return err
 	}
@@ -231,6 +248,10 @@ Environment:
   DEEPL_REQUEST_INTERVAL  Minimum DeepL request gap (default 2s)
   DEEPL_API_URL       Optional DeepL origin; :fx keys select api-free.deepl.com
   DEEPL_GLOSSARY_ID   Optional French-to-English DeepL glossary
+  GARMIN_GEOCODING_ENABLED  Cached Nominatim country lookups (default true)
+  GARMIN_GEOCODING_URL  Geocoder origin (default https://nominatim.openstreetmap.org)
+  GARMIN_GEOCODING_INTERVAL  Minimum background request gap (default 15s)
+  GARMIN_GEOCODING_USER_AGENT  Identifies this app to the geocoder
   LOG_LEVEL           Console verbosity: debug, info, warn, error, or fatal`)
 	}
 	if err := flags.Parse(args); errors.Is(err, flag.ErrHelp) {
@@ -254,6 +275,10 @@ Environment:
 	if err != nil {
 		return err
 	}
+	geoConfig, err := geocodingConfigFromEnvironment()
+	if err != nil {
+		return err
+	}
 	store, err := openStore(ctx, kind, endpoint)
 	if err != nil {
 		return err
@@ -265,6 +290,9 @@ Environment:
 	}
 	defer media.Close()
 	store.media = media
+	if err := store.reconcileTravel(ctx); err != nil {
+		return fmt.Errorf("reconcile countries and trips: %w", err)
+	}
 	if _, err := media.Scan(ctx, false); err != nil {
 		return fmt.Errorf("scan media assets: %w", err)
 	}
@@ -276,6 +304,14 @@ Environment:
 	store.translations = translations
 	translations.Start(ctx)
 	defer translations.Close()
+	var lookup countryLookup
+	if geoConfig.enabled {
+		lookup = newNominatimClient(geoConfig)
+	}
+	geocoder := newCountryService(store, geoConfig, lookup, logger)
+	store.geocoder = geocoder
+	geocoder.Start(ctx)
+	defer geocoder.Close()
 	return serve(ctx, strings.TrimSpace(*address), store, logger)
 }
 
@@ -288,7 +324,7 @@ func envDefault(name, fallback string) string {
 
 type clientLoader func() (diveClient, error)
 
-func syncWithAuthentication(ctx context.Context, archive *Archive, loadCached, loginFresh clientLoader, logger *charmLog.Logger) (int, error) {
+func syncWithAuthentication(ctx context.Context, archive *Archive, loadCached, loginFresh clientLoader, logger *charmLog.Logger, activityID int64) (int, error) {
 	reportProgress := func(completed, total int) {
 		logger.Info(fmt.Sprintf("synchronisation in progress... (%d/%d)", completed, total))
 	}
@@ -302,7 +338,13 @@ func syncWithAuthentication(ctx context.Context, archive *Archive, loadCached, l
 	if err != nil {
 		return 0, fmt.Errorf("authenticate with Garmin: %w", err)
 	}
-	added, err := syncDives(ctx, client, archive, reportProgress)
+	synchronize := func(client diveClient) (int, error) {
+		if activityID > 0 {
+			return syncDive(ctx, client, archive, activityID, reportProgress)
+		}
+		return syncDives(ctx, client, archive, reportProgress)
+	}
+	added, err := synchronize(client)
 	if !errors.Is(err, garmin.ErrSessionExpired) || loginFresh == nil {
 		return added, err
 	}
@@ -311,5 +353,5 @@ func syncWithAuthentication(ctx context.Context, archive *Archive, loadCached, l
 	if err != nil {
 		return 0, fmt.Errorf("reauthenticate with Garmin: %w", err)
 	}
-	return syncDives(ctx, client, archive, reportProgress)
+	return synchronize(client)
 }

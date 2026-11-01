@@ -30,6 +30,16 @@ tags:
   - name: Translations
     description: Background French-to-English translation, cached in the local database
 
+  - name: Countries
+    description: Cached GPS country detection and bilingual country catalog
+  - name: Home countries
+    description: Dated residence history used for automatic trips
+  - name: Trips
+    description: Automatic/manual dive trips, cruise metadata, and independent trip
+      media
+  - name: Favorites
+    description: Favorite media from individual dives, optionally filtered by trip
+
 paths:
   /api/v1/health:
     get:
@@ -47,87 +57,110 @@ paths:
 
   /api/v1/dives:
     get:
-      tags: [Dives]
+      tags:
+      - Dives
       operationId: listDives
       summary: List dives, newest first
-      description: Ordered by local_date, start_time, and activity ID descending. Pass next_cursor unchanged for the following page.
+      description: Ordered by local_date, start_time, and activity ID descending. Pass next_cursor unchanged for the
+        following page.
       parameters:
-        - { $ref: '#/components/parameters/PageLimit' }
-        - { $ref: '#/components/parameters/Cursor' }
-        - name: from
-          in: query
-          description: Inclusive local date, YYYY-MM-DD.
-          schema: { type: string, format: date }
-        - name: to
-          in: query
-          description: Inclusive local date, YYYY-MM-DD. Must not precede from.
-          schema: { type: string, format: date }
-        - name: location
-          in: query
-          description: Case-insensitive substring of the dive location.
-          schema: { type: string }
+      - $ref: '#/components/parameters/PageLimit'
+      - $ref: '#/components/parameters/Cursor'
+      - name: from
+        in: query
+        description: Inclusive local date, YYYY-MM-DD.
+        schema:
+          type: string
+          format: date
+      - name: to
+        in: query
+        description: Inclusive local date, YYYY-MM-DD. Must not precede from.
+        schema:
+          type: string
+          format: date
+      - name: location
+        in: query
+        description: Case-insensitive substring of the dive location.
+        schema:
+          type: string
+      - $ref: '#/components/parameters/Year'
+      - $ref: '#/components/parameters/CountryFilter'
+      - $ref: '#/components/parameters/TripFilter'
       responses:
         '200':
           description: A page of dive summaries including cover_photo URLs. next_cursor is omitted on the last page.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/DiveList' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '500': { $ref: '#/components/responses/InternalError' }
-
+              schema:
+                $ref: '#/components/schemas/DiveList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /api/v1/dives/{id}:
     parameters:
-      - { $ref: '#/components/parameters/ActivityID' }
+    - $ref: '#/components/parameters/ActivityID'
     get:
-      tags: [Dives]
+      tags:
+      - Dives
       operationId: getDive
       summary: Read a dive with source documents, decoded FIT data, and media
-      description: |
-        Raw Garmin documents can contain additional fields or be null. Personal
+      description: 'Raw Garmin documents can contain additional fields or be null. Personal
+
         API dives have activity_details set to null; their samples come from FIT.
+
         The fit document includes every decoded message and original FIT bytes.
+
+        '
       responses:
         '200':
           description: Dive summary and all retained documents.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/DiveDetail' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '500': { $ref: '#/components/responses/InternalError' }
+              schema:
+                $ref: '#/components/schemas/DiveDetail'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
     patch:
-      tags: [Dives]
+      tags:
+      - Dives
       operationId: updateDive
-      summary: Select or clear the dive's cover photo
-      description: |
-        Set cover_media_id to an existing photo attachment belonging to this dive.
-        Videos and attachments from other dives are rejected. Set it to null to
-        clear the cover. Selection persists across Garmin synchronization and
-        media scans. Deleting the selected photo clears the selection automatically.
-        The returned summary and dive list include cover_photo with original and
-        available thumbnail URLs; cover_photo is null when no cover is selected.
+      summary: Update cover, country override, or trip membership
+      description: Omitted fields remain unchanged. Updates are atomic. country_code=null restores GPS detection.
+        trip_id=null persists an exclusion; trip_mode=auto restores automatic assignment. Cover selections must belong
+        to the dive.
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/DivePatch' }
+            schema:
+              $ref: '#/components/schemas/DivePatch'
             examples:
               select:
                 summary: Choose an attached photo
-                value: { cover_media_id: 4f899e011d1c4c18b1034b9e5a335198 }
+                value:
+                  cover_media_id: 4f899e011d1c4c18b1034b9e5a335198
               clear:
                 summary: Clear the cover
-                value: { cover_media_id: null }
+                value:
+                  cover_media_id: null
       responses:
         '200':
           description: Updated dive summary, including the selected cover photo or null.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/DiveSummary' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '500': { $ref: '#/components/responses/InternalError' }
-
+              schema:
+                $ref: '#/components/schemas/DiveSummary'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /api/v1/dives/{id}/samples:
     parameters:
       - { $ref: '#/components/parameters/ActivityID' }
@@ -215,10 +248,11 @@ paths:
 
   /api/v1/dives/{id}/media/{mediaID}:
     parameters:
-      - { $ref: '#/components/parameters/ActivityID' }
-      - { $ref: '#/components/parameters/MediaID' }
+    - $ref: '#/components/parameters/ActivityID'
+    - $ref: '#/components/parameters/MediaID'
     get:
-      tags: [Media]
+      tags:
+      - Media
       operationId: getDiveMedia
       summary: Read attachment metadata and URLs
       responses:
@@ -226,49 +260,72 @@ paths:
           description: Media metadata; originals and thumbnails are served separately.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/MediaItem' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '500': { $ref: '#/components/responses/InternalError' }
+              schema:
+                $ref: '#/components/schemas/MediaItem'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
     patch:
-      tags: [Media]
+      tags:
+      - Media
       operationId: updateDiveMedia
-      summary: Update description, caption, or 360-degree projection settings
-      description: |
-        Provide at least one field. Omitted fields are kept. An empty description
+      summary: Update media description, caption, favorite, or projection
+      description: 'Provide at least one field. Omitted fields are kept. An empty description
+
         or caption clears that field. Descriptions describe what the photo/video
+
         shows and can contain up to 8192 UTF-8 bytes. Changing projection or stereo_layout regenerates the JPEG
+
         thumbnail. Use projection="360" for an untagged stitched equirectangular
+
         video, "flat" to disable spherical playback, or "auto" to use detected
+
         metadata. Originals are never converted or modified.
+
+        '
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/MediaPatch' }
-            example: { caption: Reef wall panorama, description: 'A sea turtle swimming above the reef near the end of the dive.', projection: '360' }
+            schema:
+              $ref: '#/components/schemas/MediaPatch'
+            example:
+              caption: Reef wall panorama
+              description: A sea turtle swimming above the reef near the end of the dive.
+              projection: '360'
       responses:
         '200':
           description: Updated media metadata and thumbnail status.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/MediaItem' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
-        '500': { $ref: '#/components/responses/InternalError' }
+              schema:
+                $ref: '#/components/schemas/MediaItem'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
     delete:
-      tags: [Media]
+      tags:
+      - Media
       operationId: deleteDiveMedia
       summary: Delete an attachment and its files
       description: Deletes the original file, cached thumbnail, and database metadata.
       responses:
         '204':
           description: Attachment deleted; the response body is empty.
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '500': { $ref: '#/components/responses/InternalError' }
-
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /api/v1/dives/{id}/media/{mediaID}/thumbnail:
     parameters:
       - { $ref: '#/components/parameters/ActivityID' }
@@ -444,8 +501,807 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '500': { $ref: '#/components/responses/InternalError' }
 
+  /api/v1/countries:
+    get:
+      tags:
+      - Countries
+      operationId: listCountries
+      summary: List country codes and French/English names
+      parameters:
+      - name: q
+        in: query
+        schema:
+          type: string
+        description: Optional case/accent-insensitive search.
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CountryList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/countries/status:
+    get:
+      tags:
+      - Countries
+      operationId: getCountryLookupStatus
+      summary: Read cached country lookup progress
+      description: Background lookups never block dive reads. Public Nominatim requests are identified, cached, and
+        spaced at least 15 seconds apart. See https://operations.osmfoundation.org/policies/nominatim/.
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CountryLookupStatus'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/countries/retry:
+    post:
+      tags:
+      - Countries
+      operationId: retryCountryLookups
+      summary: Retry failed or unresolved country lookups
+      responses:
+        '202':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - status
+                properties:
+                  status:
+                    type: string
+                    enum:
+                    - queued
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          description: Geocoding disabled; configure and restart serve.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/home-countries:
+    get:
+      tags:
+      - Home countries
+      operationId: listHomeCountries
+      summary: List dated home-country periods
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HomeCountryList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags:
+      - Home countries
+      operationId: createHomeCountry
+      summary: Create a home-country period
+      description: Dates are inclusive; to=null is open-ended. Overlaps return 409. Automatic trips are recalculated
+        without changing manual links or exclusions.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HomeCountryCreate'
+      responses:
+        '201':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HomeCountry'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '409':
+          description: Date ranges overlap.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/home-countries/{homeID}:
+    parameters:
+    - $ref: '#/components/parameters/HomeID'
+    get:
+      tags:
+      - Home countries
+      operationId: getHomeCountry
+      summary: Read a home-country period
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HomeCountry'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      tags:
+      - Home countries
+      operationId: updateHomeCountry
+      summary: Update a home-country period
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HomeCountryPatch'
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HomeCountry'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '409':
+          description: Date ranges overlap.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags:
+      - Home countries
+      operationId: deleteHomeCountry
+      summary: Delete a home-country period
+      responses:
+        '204':
+          description: Success; no response body.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/trips:
+    get:
+      tags:
+      - Trips
+      operationId: listTrips
+      summary: List and filter dive trips
+      parameters:
+      - $ref: '#/components/parameters/PageLimit'
+      - $ref: '#/components/parameters/Cursor'
+      - $ref: '#/components/parameters/Year'
+      - $ref: '#/components/parameters/CountryFilter'
+      - name: name
+        in: query
+        schema:
+          type: string
+        description: Substring of French/English trip name, ignoring accents and case.
+      - name: from
+        in: query
+        schema:
+          type: string
+          format: date
+        description: Trip must overlap this inclusive local-date range.
+      - name: to
+        in: query
+        schema:
+          type: string
+          format: date
+      - name: min_rating
+        in: query
+        schema:
+          type: number
+          minimum: 0
+          maximum: 5
+      - name: max_rating
+        in: query
+        schema:
+          type: number
+          minimum: 0
+          maximum: 5
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TripList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags:
+      - Trips
+      operationId: createTrip
+      summary: Create a trip
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TripCreate'
+      responses:
+        '201':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiveTrip'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/trips/rebuild:
+    post:
+      tags:
+      - Trips
+      operationId: rebuildTrips
+      summary: Recalculate automatic trip assignments
+      description: Waits for known country and home-country history. A country change, home-country dive, uncovered
+        date, or gap longer than three calendar months splits automatic groups. Trips crossing December/January keep
+        the starting year. Manual memberships, overrides, exclusions, and deleted-trip suppression are preserved.
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - status
+                properties:
+                  status:
+                    type: string
+                    enum:
+                    - rebuilt
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/trips/{tripID}:
+    parameters:
+    - $ref: '#/components/parameters/TripID'
+    get:
+      tags:
+      - Trips
+      operationId: getTrip
+      summary: Read trip metadata, dive IDs, own media, and favorite dive media
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TripDetail'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      tags:
+      - Trips
+      operationId: updateTrip
+      summary: Update trip metadata or replace dive membership
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TripPatch'
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiveTrip'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags:
+      - Trips
+      operationId: deleteTrip
+      summary: Delete a trip while retaining dives and original media
+      description: Soft-deletes the trip and excludes its current dives from automatic regrouping. Original files
+        and media metadata remain retained.
+      responses:
+        '204':
+          description: Success; no response body.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/trips/{tripID}/dives:
+    parameters:
+    - $ref: '#/components/parameters/TripID'
+    get:
+      tags:
+      - Trips
+      operationId: listTripDives
+      summary: List linked dives using normal dive filters and pagination
+      parameters:
+      - $ref: '#/components/parameters/PageLimit'
+      - $ref: '#/components/parameters/Cursor'
+      - name: from
+        in: query
+        description: Inclusive local date, YYYY-MM-DD.
+        schema:
+          type: string
+          format: date
+      - name: to
+        in: query
+        description: Inclusive local date, YYYY-MM-DD. Must not precede from.
+        schema:
+          type: string
+          format: date
+      - name: location
+        in: query
+        description: Case-insensitive substring of the dive location.
+        schema:
+          type: string
+      - $ref: '#/components/parameters/Year'
+      - $ref: '#/components/parameters/CountryFilter'
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiveList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/trips/{tripID}/dives/{id}:
+    parameters:
+    - $ref: '#/components/parameters/TripID'
+    - $ref: '#/components/parameters/ActivityID'
+    put:
+      tags:
+      - Trips
+      operationId: linkTripDive
+      summary: Manually assign a dive to this trip
+      description: Idempotent. Moves an existing dive from its previous trip. Countries may differ; the first linked
+        dive determines the generated primary country.
+      responses:
+        '204':
+          description: Success; no response body.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags:
+      - Trips
+      operationId: unlinkTripDive
+      summary: Remove a dive and persist its automatic-trip exclusion
+      description: The dive, original FIT and media remain. PATCH the dive with trip_mode=auto to restore automatic
+        grouping.
+      responses:
+        '204':
+          description: Success; no response body.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/media/favorites:
+    get:
+      tags:
+      - Favorites
+      operationId: listFavoriteDiveMedia
+      summary: List favorite photos/videos across dives
+      parameters:
+      - $ref: '#/components/parameters/PageLimit'
+      - $ref: '#/components/parameters/Cursor'
+      - $ref: '#/components/parameters/TripFilter'
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MediaList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/trips/{tripID}/media:
+    parameters:
+    - $ref: '#/components/parameters/TripID'
+    get:
+      tags:
+      - Trips
+      operationId: listTripMedia
+      summary: List attachments, sorted by original filename
+      parameters:
+      - $ref: '#/components/parameters/PageLimit'
+      - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: A page of media. next_cursor is omitted on the last page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MediaList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags:
+      - Trips
+      operationId: uploadTripMedia
+      summary: Upload one original photo or video
+      description: 'Send exactly one multipart field named file, retaining its original
+
+        filename. Filenames cannot start with a dot or contain path separators
+
+        or control characters, and are limited to 255 bytes. Existing names
+
+        return 409 and are never overwritten, including files not yet indexed.
+
+        The default upload limit is 16 GiB; read the current limit from media/status.
+
+        Processing is synchronous. An unsupported codec or missing FFmpeg still
+
+        returns 201 with thumbnail_status=error; the original remains available.
+
+        Spherical projection metadata is detected when present. Use PATCH with
+
+        projection="360" for an untagged stitched equirectangular export.
+
+        '
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+              - file
+              additionalProperties: false
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: One photo or video with its original filename.
+      responses:
+        '201':
+          description: Original stored and indexed; inspect thumbnail_status for processing results.
+          headers:
+            Location:
+              description: Relative URL of the created attachment metadata.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MediaItem'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/UploadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMedia'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/trips/{tripID}/media/{mediaID}:
+    parameters:
+    - $ref: '#/components/parameters/TripID'
+    - $ref: '#/components/parameters/MediaID'
+    get:
+      tags:
+      - Trips
+      operationId: getTripMedia
+      summary: Read attachment metadata and URLs
+      responses:
+        '200':
+          description: Media metadata; originals and thumbnails are served separately.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MediaItem'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      tags:
+      - Trips
+      operationId: updateTripMedia
+      summary: Update description, caption, or 360-degree projection settings
+      description: "Provide at least one field. Omitted fields are kept. An empty description\nor caption clears that\
+        \ field. Descriptions describe what the photo/video\nshows and can contain up to 8192 UTF-8 bytes. Changing\
+        \ projection or stereo_layout regenerates the JPEG\nthumbnail. Use projection=\"360\" for an untagged stitched\
+        \ equirectangular\nvideo, \"flat\" to disable spherical playback, or \"auto\" to use detected\nmetadata. Originals\
+        \ are never converted or modified.\n Favorites are only supported for dive-owned media."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MediaPatch'
+            example:
+              caption: Reef wall panorama
+              description: A sea turtle swimming above the reef near the end of the trip.
+              projection: '360'
+      responses:
+        '200':
+          description: Updated media metadata and thumbnail status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MediaItem'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags:
+      - Trips
+      operationId: deleteTripMedia
+      summary: Delete an attachment and its files
+      description: Deletes the original file, cached thumbnail, and database metadata.
+      responses:
+        '204':
+          description: Attachment deleted; the response body is empty.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/trips/{tripID}/media/{mediaID}/thumbnail:
+    parameters:
+    - $ref: '#/components/parameters/TripID'
+    - $ref: '#/components/parameters/MediaID'
+    - $ref: '#/components/parameters/Range'
+    - $ref: '#/components/parameters/IfNoneMatch'
+    - $ref: '#/components/parameters/IfModifiedSince'
+    - $ref: '#/components/parameters/IfRange'
+    - name: v
+      in: query
+      description: Optional thumbnail version from thumbnail_url; the current thumbnail is always served.
+      schema:
+        type: string
+    get:
+      tags:
+      - Trips
+      operationId: getTripMediaThumbnail
+      summary: Serve the JPEG thumbnail, up to 640 pixels per dimension
+      description: Equirectangular 360-degree media uses a 640x360 perspective preview. Other formats use a scaled
+        decoded frame. A missing or failed thumbnail returns 404 thumbnail_unavailable; rescan to retry processing.
+      responses:
+        '200':
+          description: Complete JPEG thumbnail.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Last-Modified:
+              $ref: '#/components/headers/LastModified'
+            Accept-Ranges:
+              $ref: '#/components/headers/AcceptRanges'
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+        '206':
+          $ref: '#/components/responses/PartialFile'
+        '304':
+          $ref: '#/components/responses/NotModified'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '416':
+          $ref: '#/components/responses/RangeNotSatisfiable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    head:
+      tags:
+      - Trips
+      operationId: headTripMediaThumbnail
+      summary: Read thumbnail headers without downloading it
+      responses:
+        '200':
+          $ref: '#/components/responses/FileHeaders'
+        '206':
+          $ref: '#/components/responses/PartialFileHeaders'
+        '304':
+          $ref: '#/components/responses/NotModified'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '416':
+          $ref: '#/components/responses/RangeNotSatisfiable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /assets/trips/{tripID}/{filename}:
+    parameters:
+    - $ref: '#/components/parameters/TripID'
+    - name: filename
+      in: path
+      required: true
+      description: Original filename from MediaItem.filename; URL-encode it or use MediaItem.url directly.
+      schema:
+        type: string
+        minLength: 1
+      example: Turtle original.jpeg
+    - $ref: '#/components/parameters/Range'
+    - $ref: '#/components/parameters/IfNoneMatch'
+    - $ref: '#/components/parameters/IfModifiedSince'
+    - $ref: '#/components/parameters/IfRange'
+    get:
+      tags:
+      - Assets
+      operationId: getMediaOriginalTrip
+      summary: Serve an original photo or video
+      description: 'Streams original bytes with their stored Content-Type and inline filename.
+
+        Range requests support video seeking. If an indexed file changed on disk,
+
+        returns 409 media_changed until a rescan refreshes its metadata. Directory
+
+        browsing is disabled. The frontend can use effective_projection and
+
+        projection_format to select a 360-degree player; the server preserves
+
+        the original container without transcoding or stitching camera footage.
+
+        '
+      responses:
+        '200':
+          $ref: '#/components/responses/CompleteFile'
+        '206':
+          $ref: '#/components/responses/PartialFile'
+        '304':
+          $ref: '#/components/responses/NotModified'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '416':
+          $ref: '#/components/responses/RangeNotSatisfiable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    head:
+      tags:
+      - Assets
+      operationId: headMediaOriginalTrip
+      summary: Read original-file headers without downloading it
+      responses:
+        '200':
+          $ref: '#/components/responses/FileHeaders'
+        '206':
+          $ref: '#/components/responses/PartialFileHeaders'
+        '304':
+          $ref: '#/components/responses/NotModified'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '416':
+          $ref: '#/components/responses/RangeNotSatisfiable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
 components:
   parameters:
+    TripID:
+      name: tripID
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: ^[a-f0-9]{32}$
+    HomeID:
+      name: homeID
+      in: path
+      required: true
+      schema:
+        type: string
+    Year:
+      name: year
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 9999
+    CountryFilter:
+      name: country
+      in: query
+      schema:
+        type: string
+      description: Country code or French/English name; matching ignores accents and case.
+    TripFilter:
+      name: trip_id
+      in: query
+      schema:
+        type: string
     ActivityID:
       name: id
       in: path
@@ -626,24 +1482,76 @@ components:
         next_cursor: { type: string, description: Omitted on the last page. }
     DiveSummary:
       type: object
-      required: [id, name, activity_type, dive_type, start_time, local_date, timezone, location, notes, description, rating, rating_max, comment, highlights, cover_media_id, cover_photo, translations]
+      required:
+      - id
+      - name
+      - activity_type
+      - dive_type
+      - start_time
+      - local_date
+      - timezone
+      - location
+      - notes
+      - description
+      - rating
+      - rating_max
+      - comment
+      - highlights
+      - cover_media_id
+      - cover_photo
+      - translations
+      - year
+      - country
+      - detected_country
+      - country_override
+      - country_source
+      - trip_id
+      - trip_assignment
       properties:
-        id: { type: integer, format: int64, description: Garmin activity ID. }
-        garmin_dive_id: { type: integer, format: int64, description: Separate identifier from Garmin Dive when available. }
-        dive_number: { type: integer }
-        name: { type: string }
-        activity_type: { type: string }
-        dive_type: { type: string }
-        start_time: { type: string, description: 'Recorded start time, usually ISO 8601; empty if unavailable.' }
-        local_date: { type: string, description: Local YYYY-MM-DD date; empty if unavailable. }
-        timezone: { type: string }
-        location: { type: string }
-        entry_latitude: { type: number, format: double }
-        entry_longitude: { type: number, format: double }
-        exit_latitude: { type: number, format: double }
-        exit_longitude: { type: number, format: double }
-        notes: { type: string, description: Original stored Garmin Dive note; preserved verbatim. }
-        description: { type: string, description: Original stored activity description; Personal API notes can be stored here. }
+        id:
+          type: integer
+          format: int64
+          description: Garmin activity ID.
+        garmin_dive_id:
+          type: integer
+          format: int64
+          description: Separate identifier from Garmin Dive when available.
+        dive_number:
+          type: integer
+        name:
+          type: string
+        activity_type:
+          type: string
+        dive_type:
+          type: string
+        start_time:
+          type: string
+          description: Recorded start time, usually ISO 8601; empty if unavailable.
+        local_date:
+          type: string
+          description: Local YYYY-MM-DD date; empty if unavailable.
+        timezone:
+          type: string
+        location:
+          type: string
+        entry_latitude:
+          type: number
+          format: double
+        entry_longitude:
+          type: number
+          format: double
+        exit_latitude:
+          type: number
+          format: double
+        exit_longitude:
+          type: number
+          format: double
+        notes:
+          type: string
+          description: Original stored Garmin Dive note; preserved verbatim.
+        description:
+          type: string
+          description: Original stored activity description; Personal API notes can be stored here.
         rating:
           type: number
           format: double
@@ -657,31 +1565,87 @@ components:
           nullable: true
           minimum: 0
           exclusiveMinimum: true
-          description: Explicit rating denominator. Null when the rating is missing/invalid or no denominator was provided. Ratings are not normalized.
+          description: Explicit rating denominator. Null when the rating is missing/invalid or no denominator was provided.
+            Ratings are not normalized.
           example: 5
         comment:
           type: string
-          description: Multiline text in Commentaire sections. Newlines are normalized and outer whitespace trimmed; empty when absent.
-          example: "Enfin pu faire la passe !\nOn parle de canyons mais ce sont plus des tranchés que des vrais canyons."
+          description: Multiline text in Commentaire sections. Newlines are normalized and outer whitespace trimmed;
+            empty when absent.
+          example: 'Enfin pu faire la passe !
+
+            On parle de canyons mais ce sont plus des tranchés que des vrais canyons.'
         highlights:
           type: array
-          description: Nonempty lines in HL sections, in original order. Optional list bullets are removed; empty when absent.
-          items: { type: string }
-          example: [Pleiiin de requins vers les 50m, Raies aigles, Requin dormeur]
-        duration_seconds: { type: number, format: double }
-        max_depth_meters: { type: number, format: double }
-        average_depth_meters: { type: number, format: double }
-        average_heart_rate: { type: number, format: double, description: Beats per minute. }
-        max_heart_rate: { type: number, format: double, description: Beats per minute. }
-        min_temperature_celsius: { type: number, format: double }
-        average_temperature_celsius: { type: number, format: double }
-        max_temperature_celsius: { type: number, format: double }
+          description: Nonempty lines in HL sections, in original order. Optional list bullets are removed; empty when
+            absent.
+          items:
+            type: string
+          example:
+          - Pleiiin de requins vers les 50m
+          - Raies aigles
+          - Requin dormeur
+        duration_seconds:
+          type: number
+          format: double
+        max_depth_meters:
+          type: number
+          format: double
+        average_depth_meters:
+          type: number
+          format: double
+        average_heart_rate:
+          type: number
+          format: double
+          description: Beats per minute.
+        max_heart_rate:
+          type: number
+          format: double
+          description: Beats per minute.
+        min_temperature_celsius:
+          type: number
+          format: double
+        average_temperature_celsius:
+          type: number
+          format: double
+        max_temperature_celsius:
+          type: number
+          format: double
         cover_media_id:
           type: string
           nullable: true
           description: Selected photo attachment ID; null when no cover is selected.
-        cover_photo: { $ref: '#/components/schemas/DiveCoverPhoto' }
-        translations: { $ref: '#/components/schemas/Translations' }
+        cover_photo:
+          $ref: '#/components/schemas/DiveCoverPhoto'
+        translations:
+          $ref: '#/components/schemas/Translations'
+        year:
+          type: integer
+          nullable: true
+          description: Year of the dive local date.
+        country:
+          $ref: '#/components/schemas/Country'
+        detected_country:
+          $ref: '#/components/schemas/Country'
+        country_override:
+          type: string
+          nullable: true
+          description: Manual country code; null uses the detected country.
+        country_source:
+          type: string
+          enum:
+          - auto
+          - manual
+          - unknown
+        trip_id:
+          type: string
+          nullable: true
+        trip_assignment:
+          type: string
+          enum:
+          - auto
+          - manual
+          - excluded
     DiveCoverPhoto:
       type: object
       nullable: true
@@ -697,13 +1661,26 @@ components:
     DivePatch:
       type: object
       additionalProperties: false
-      required: [cover_media_id]
       properties:
         cover_media_id:
           type: string
           nullable: true
           minLength: 1
           description: Existing photo attachment ID for this dive. Use null to clear the cover.
+        country_code:
+          type: string
+          nullable: true
+          description: Country code or French/English name; null restores automatic GPS lookup.
+        trip_id:
+          type: string
+          nullable: true
+          description: Manually assign to a trip, or null to exclude the dive from automatic trips.
+        trip_mode:
+          type: string
+          enum:
+          - auto
+          description: Restore automatic trip assignment; cannot be combined with trip_id.
+      minProperties: 1
     DiveDetail:
       type: object
       required: [dive, activity, activity_details, dive_details, fit, record_metadata, alerts, media]
@@ -841,39 +1818,128 @@ components:
       description: Defaults to auto for new media. Uses spherical metadata when present; explicit 360 denotes a stitched equirectangular export when no format metadata is available.
     MediaItem:
       type: object
-      required: [id, dive_id, filename, kind, content_type, size_bytes, sha256, width, height, duration_seconds, stereo_layout, projection, effective_projection, caption, description, thumbnail_status, probe, created_at, updated_at, url, translations]
+      required:
+      - id
+      - filename
+      - kind
+      - content_type
+      - size_bytes
+      - sha256
+      - width
+      - height
+      - duration_seconds
+      - stereo_layout
+      - projection
+      - effective_projection
+      - caption
+      - description
+      - thumbnail_status
+      - probe
+      - created_at
+      - updated_at
+      - url
+      - translations
+      - favorite
       properties:
-        id: { type: string, description: Opaque attachment identifier. }
-        dive_id: { type: integer, format: int64, description: Garmin activity ID. }
-        filename: { type: string, description: 'Original filename, preserved exactly.' }
-        kind: { type: string, enum: [photo, video] }
-        content_type: { type: string }
-        size_bytes: { type: integer, format: int64, minimum: 1 }
-        sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
-        width: { type: integer, minimum: 0, description: Original encoded width; zero if inspection failed. }
-        height: { type: integer, minimum: 0, description: Original encoded height; zero if inspection failed. }
-        duration_seconds: { type: number, format: double, minimum: 0 }
-        stereo_layout: { $ref: '#/components/schemas/StereoLayout' }
-        detected_stereo_layout: { type: string, description: Detected layout when available; omitted otherwise. }
-        projection: { $ref: '#/components/schemas/Projection' }
+        id:
+          type: string
+          description: Opaque attachment identifier.
+        dive_id:
+          type: integer
+          format: int64
+          description: Garmin activity ID.
+        filename:
+          type: string
+          description: Original filename, preserved exactly.
+        kind:
+          type: string
+          enum:
+          - photo
+          - video
+        content_type:
+          type: string
+        size_bytes:
+          type: integer
+          format: int64
+          minimum: 1
+        sha256:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+        width:
+          type: integer
+          minimum: 0
+          description: Original encoded width; zero if inspection failed.
+        height:
+          type: integer
+          minimum: 0
+          description: Original encoded height; zero if inspection failed.
+        duration_seconds:
+          type: number
+          format: double
+          minimum: 0
+        stereo_layout:
+          $ref: '#/components/schemas/StereoLayout'
+        detected_stereo_layout:
+          type: string
+          description: Detected layout when available; omitted otherwise.
+        projection:
+          $ref: '#/components/schemas/Projection'
         effective_projection:
           type: string
-          enum: [flat, '180', '360']
-          description: Resolved projection for the frontend player. Auto resolves to flat unless spherical metadata identifies 360-degree media.
+          enum:
+          - flat
+          - '180'
+          - '360'
+          description: Resolved projection for the frontend player. Auto resolves to flat unless spherical metadata
+            identifies 360-degree media.
         projection_format:
           type: string
-          enum: [equirectangular, cubemap]
+          enum:
+          - equirectangular
+          - cubemap
           description: Detected source texture format; explicit 360 defaults to equirectangular when metadata is missing.
-        caption: { type: string }
-        description: { type: string, description: User-provided description of what the photo/video shows; empty when unset. }
-        thumbnail_status: { type: string, enum: [ready, error] }
-        thumbnail_error: { type: string, description: Present when inspection or thumbnail generation failed. }
-        probe: { type: object, additionalProperties: true, description: 'Full FFprobe format/stream metadata, or an empty object on inspection failure.' }
-        created_at: { type: string, format: date-time }
-        updated_at: { type: string, format: date-time }
-        url: { type: string, description: Relative URL for the original file; its filename is already URL-encoded. }
-        thumbnail_url: { type: string, description: Relative versioned JPEG URL; omitted unless thumbnail_status is ready. }
-        translations: { $ref: '#/components/schemas/Translations' }
+        caption:
+          type: string
+        description:
+          type: string
+          description: User-provided description of what the photo/video shows; empty when unset.
+        thumbnail_status:
+          type: string
+          enum:
+          - ready
+          - error
+        thumbnail_error:
+          type: string
+          description: Present when inspection or thumbnail generation failed.
+        probe:
+          type: object
+          additionalProperties: true
+          description: Full FFprobe format/stream metadata, or an empty object on inspection failure.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        url:
+          type: string
+          description: Relative URL for the original file; its filename is already URL-encoded.
+        thumbnail_url:
+          type: string
+          description: Relative versioned JPEG URL; omitted unless thumbnail_status is ready.
+        translations:
+          $ref: '#/components/schemas/Translations'
+        trip_id:
+          type: string
+          description: Owning trip ID; present for trip-owned media instead of dive_id.
+        favorite:
+          type: boolean
+          description: Favorite dive attachment. Trip-owned media always has false.
+      oneOf:
+      - required:
+        - dive_id
+      - required:
+        - trip_id
     Translations:
       type: object
       required: [en]
@@ -882,20 +1948,49 @@ components:
         en: { $ref: '#/components/schemas/EnglishTranslation' }
     EnglishTranslation:
       type: object
-      required: [status]
+      required:
+      - status
       properties:
         status:
           type: string
-          enum: [pending, ready, error, disabled]
-          description: pending waits for background processing; ready exposes available English fields; error requires retry or provider recovery; disabled means no DEEPL_API_KEY and no cached result. Existing ready cache entries work without a key.
-        comment: { type: string, description: Translated dive comment; present only when ready and nonempty. }
+          enum:
+          - pending
+          - ready
+          - error
+          - disabled
+          description: pending waits for background processing; ready exposes available English fields; error requires
+            retry or provider recovery; disabled means no DEEPL_API_KEY and no cached result. Existing ready cache entries
+            work without a key.
+        comment:
+          type: string
+          description: Translated dive comment; present only when ready and nonempty.
         highlights:
           type: array
-          items: { type: string }
+          items:
+            type: string
           description: Translated dive highlights in the original order; present only when ready and nonempty.
-        caption: { type: string, description: Translated media caption; present only when ready and nonempty. }
-        description: { type: string, description: Translated media/cover description; present only when ready and nonempty. }
-        error: { type: string, description: Machine-readable provider/cache error code; credentials and upstream response text are never included. }
+        caption:
+          type: string
+          description: Translated media caption; present only when ready and nonempty.
+        description:
+          type: string
+          description: Translated media/cover description; present only when ready and nonempty.
+        error:
+          type: string
+          description: Machine-readable provider/cache error code; credentials and upstream response text are never
+            included.
+        name:
+          type: string
+          description: English trip name. Generated/manual names can be available even while other fields are pending.
+        subtitle:
+          type: string
+          description: Translated trip subtitle.
+        operator_comment:
+          type: string
+          description: Translated cruise operator comment.
+        price:
+          type: string
+          description: Translated approximate per-person trip price text.
     TranslationStatus:
       type: object
       required: [enabled, provider, source_language, target_language, target_locale, pending, ready, failed, cached_revisions]
@@ -915,10 +2010,19 @@ components:
       additionalProperties: false
       minProperties: 1
       properties:
-        caption: { type: string, description: At most 4096 UTF-8 bytes; an empty string clears it. }
-        description: { type: string, description: At most 8192 UTF-8 bytes describing the photo/video; an empty string clears it. }
-        stereo_layout: { $ref: '#/components/schemas/StereoLayout' }
-        projection: { $ref: '#/components/schemas/Projection' }
+        caption:
+          type: string
+          description: At most 4096 UTF-8 bytes; an empty string clears it.
+        description:
+          type: string
+          description: At most 8192 UTF-8 bytes describing the photo/video; an empty string clears it.
+        stereo_layout:
+          $ref: '#/components/schemas/StereoLayout'
+        projection:
+          $ref: '#/components/schemas/Projection'
+        favorite:
+          type: boolean
+          description: Mark/unmark a dive photo or video as favorite. Not accepted for trip-owned media.
     MediaScanResult:
       type: object
       required: [scanned, added, updated, unchanged, removed, skipped, failed]
@@ -941,3 +2045,394 @@ components:
         thumbnails_failed: { type: integer, format: int64, minimum: 0 }
         max_upload_bytes: { type: integer, format: int64, minimum: 1, example: 17179869184 }
         thumbnail_max_dimension: { type: integer, example: 640 }
+
+    Country:
+      type: object
+      properties:
+        code:
+          type: string
+          pattern: ^[A-Z]{2}$
+          example: EG
+        name_fr:
+          type: string
+          example: Égypte
+        name_en:
+          type: string
+          example: Egypt
+      nullable: true
+      description: Country/destination with local bilingual names. Overseas territories such as NC and PF are separate
+        from FR. Null when unknown.
+      required:
+      - code
+      - name_fr
+      - name_en
+    CountryList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Country'
+      required:
+      - items
+    CountryLookupStatus:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        pending:
+          type: integer
+          minimum: 0
+        ready:
+          type: integer
+          minimum: 0
+        not_found:
+          type: integer
+          minimum: 0
+        failed:
+          type: integer
+          minimum: 0
+        request_interval_seconds:
+          type: number
+        attribution:
+          type: string
+          description: Display this OpenStreetMap attribution when using geocoded countries.
+        blocked_reason:
+          type: string
+          description: Provider configuration/authentication rejection pausing calls until retry or restart.
+      required:
+      - enabled
+      - pending
+      - ready
+      - not_found
+      - failed
+      - request_interval_seconds
+      - attribution
+      description: Counts unique positions currently used for automatic detection; manual overrides and unreferenced
+        cache entries are excluded.
+    HomeCountry:
+      type: object
+      properties:
+        id:
+          type: string
+        country:
+          $ref: '#/components/schemas/Country'
+        from:
+          type: string
+          format: date
+          description: Inclusive first local date.
+        to:
+          type: string
+          format: date
+          nullable: true
+          description: Inclusive last local date; null means open-ended.
+      required:
+      - id
+      - country
+      - from
+      - to
+    HomeCountryList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/HomeCountry'
+      required:
+      - items
+    HomeCountryPatch:
+      type: object
+      properties:
+        country_code:
+          type: string
+          description: Country code or French/English country name.
+        from:
+          type: string
+          format: date
+        to:
+          type: string
+          format: date
+          nullable: true
+      additionalProperties: false
+      minProperties: 1
+    HomeCountryCreate:
+      type: object
+      properties:
+        country_code:
+          type: string
+          description: Country code or French/English country name.
+        from:
+          type: string
+          format: date
+        to:
+          type: string
+          format: date
+          nullable: true
+      additionalProperties: false
+      minProperties: 1
+      required:
+      - country_code
+      - from
+    DiveTrip:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+          description: French trip name; generated from primary country and starting year unless overridden.
+        name_en:
+          type: string
+          description: Generated/manual English name, or cached translated custom name when available.
+        name_overridden:
+          type: boolean
+        year:
+          type: integer
+          minimum: 1
+          maximum: 9999
+        year_overridden:
+          type: boolean
+        country:
+          $ref: '#/components/schemas/Country'
+        country_overridden:
+          type: boolean
+        subtitle:
+          type: string
+        description:
+          type: string
+        rating:
+          type: number
+          nullable: true
+          minimum: 0
+          maximum: 5
+        cruise:
+          type: boolean
+        operator_name:
+          type: string
+        operator_website:
+          type: string
+        operator_comment:
+          type: string
+        price:
+          type: string
+          description: Free-text approximate price per person, including currency or context if desired.
+        start_date:
+          type: string
+          description: First linked dive local date; empty if no dives.
+        end_date:
+          type: string
+          description: Last linked dive local date; empty if no dives.
+        automatic:
+          type: boolean
+        dive_count:
+          type: integer
+          format: int64
+          minimum: 0
+        cover_media_id:
+          type: string
+          nullable: true
+        cover_photo:
+          type: object
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/MediaItem'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        translations:
+          $ref: '#/components/schemas/Translations'
+      required:
+      - id
+      - name
+      - name_en
+      - name_overridden
+      - year
+      - year_overridden
+      - country
+      - country_overridden
+      - subtitle
+      - description
+      - rating
+      - cruise
+      - operator_name
+      - operator_website
+      - operator_comment
+      - price
+      - start_date
+      - end_date
+      - automatic
+      - dive_count
+      - cover_media_id
+      - cover_photo
+      - created_at
+      - updated_at
+      - translations
+    TripList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DiveTrip'
+        next_cursor:
+          type: string
+      required:
+      - items
+    TripDetail:
+      type: object
+      properties:
+        trip:
+          $ref: '#/components/schemas/DiveTrip'
+        dive_ids:
+          type: array
+          items:
+            type: integer
+            format: int64
+        media:
+          type: array
+          items:
+            $ref: '#/components/schemas/MediaItem'
+          description: Media uploaded directly to this trip.
+        favorite_dive_media:
+          type: array
+          items:
+            $ref: '#/components/schemas/MediaItem'
+          description: First 100 favorite attachments from currently linked dives, separate from trip-owned media.
+        favorites_next_cursor:
+          type: string
+          description: Continue using GET /api/v1/media/favorites?trip_id=...&cursor=...
+      required:
+      - trip
+      - dive_ids
+      - media
+      - favorite_dive_media
+    TripPatch:
+      type: object
+      properties:
+        name:
+          type: string
+          nullable: true
+          maxLength: 1024
+          description: Custom French name; null restores generated names.
+        name_en:
+          type: string
+          maxLength: 1024
+          description: Optional English override for a custom name. Empty uses cached DeepL translation.
+        year:
+          type: integer
+          nullable: true
+          minimum: 1
+          maximum: 9999
+          description: Null restores starting-dive year.
+        country_code:
+          type: string
+          nullable: true
+          description: Country code or French/English name; null restores first-dive country.
+        subtitle:
+          type: string
+          description: At most 4096 UTF-8 bytes.
+        description:
+          type: string
+          description: At most 32768 UTF-8 bytes.
+        rating:
+          type: number
+          nullable: true
+          minimum: 0
+          maximum: 5
+        cruise:
+          type: boolean
+        operator_name:
+          type: string
+          description: At most 1024 UTF-8 bytes.
+        operator_website:
+          type: string
+          description: HTTP/HTTPS URL without credentials; at most 2048 UTF-8 bytes.
+        operator_comment:
+          type: string
+          description: French comment; at most 8192 UTF-8 bytes.
+        price:
+          type: string
+          description: Approximate price per person, free text; at most 4096 UTF-8 bytes.
+        cover_media_id:
+          type: string
+          nullable: true
+          description: Photo owned by this trip, or null to clear.
+        dive_ids:
+          type: array
+          uniqueItems: true
+          items:
+            type: integer
+            format: int64
+            minimum: 1
+          description: Replaces membership. Listed dives become manual assignments; removed dives stay excluded from
+            automatic regrouping.
+      additionalProperties: false
+      minProperties: 1
+    TripCreate:
+      type: object
+      properties:
+        name:
+          type: string
+          nullable: true
+          maxLength: 1024
+          description: Custom French name; null restores generated names.
+        name_en:
+          type: string
+          maxLength: 1024
+          description: Optional English override for a custom name. Empty uses cached DeepL translation.
+        year:
+          type: integer
+          nullable: false
+          minimum: 1
+          maximum: 9999
+          description: Null restores starting-dive year.
+        country_code:
+          type: string
+          nullable: false
+          description: Country code or French/English name; null restores first-dive country.
+        subtitle:
+          type: string
+          description: At most 4096 UTF-8 bytes.
+        description:
+          type: string
+          description: At most 32768 UTF-8 bytes.
+        rating:
+          type: number
+          nullable: true
+          minimum: 0
+          maximum: 5
+        cruise:
+          type: boolean
+        operator_name:
+          type: string
+          description: At most 1024 UTF-8 bytes.
+        operator_website:
+          type: string
+          description: HTTP/HTTPS URL without credentials; at most 2048 UTF-8 bytes.
+        operator_comment:
+          type: string
+          description: French comment; at most 8192 UTF-8 bytes.
+        price:
+          type: string
+          description: Approximate price per person, free text; at most 4096 UTF-8 bytes.
+        cover_media_id:
+          type: string
+          nullable: true
+          description: Photo owned by this trip, or null to clear.
+        dive_ids:
+          type: array
+          uniqueItems: true
+          items:
+            type: integer
+            format: int64
+            minimum: 1
+          description: Replaces membership. Listed dives become manual assignments; removed dives stay excluded from
+            automatic regrouping.
+      additionalProperties: false
+      minProperties: 1
+      required:
+      - year
+      - country_code

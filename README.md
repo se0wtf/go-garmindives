@@ -125,10 +125,185 @@ JSON documents and fills missing SQL summary values from FIT. When FIT contains
 samples, those become the indexed profile. Once FIT has been imported, the dive
 is skipped on later runs, even if its file has no profile samples.
 
+To refresh one dive after editing its notes on Garmin, select its activity ID:
+
+```sh
+go-garmindives sync -activity-id 24424941853
+```
+
+This fetches only the selected dive directly, without listing activity history
+or importing other dives. It refreshes the source metadata and reparses the
+rating, comment, and highlights. Existing FIT files, profile samples, media
+descriptions, and cover selection are retained. FIT is downloaded only if it is
+missing; a dive not yet stored is imported on its own. The usual authentication,
+request pacing, and output flags also apply, for example `-output-dsn /path/to/dives.db`.
+The translation worker discovers changed French text while `serve` is running.
+
 Downloads are sequential. YAML is replaced atomically only after every download
 and decode succeeds; SQL batches, including FIT backfills, commit in one
 transaction. Corrupt or unavailable original files fail the sync without saving
 partial changes. YAML, SQLite, and the token file use mode `0600` where applicable.
+
+## Countries, years, residence history, and trips
+
+Dive list/detail summaries now expose `year`, bilingual `country`,
+`detected_country`, `country_override`, `country_source`, `trip_id`, and
+`trip_assignment`. Years use the dive's **local date**. Combine the existing
+date/location filters with `year`, `country`, or `trip_id`:
+
+```sh
+curl 'http://127.0.0.1:8080/api/v1/dives?year=2025&country=Egypt'
+curl 'http://127.0.0.1:8080/api/v1/dives?country=Egypte'
+```
+
+Countries use stable uppercase codes and both names, for example
+`{"code":"EG","name_fr":"Égypte","name_en":"Egypt"}`. Filters accept a
+code or either name, ignoring case and accents. `GET /api/v1/countries?q=egypte`
+provides the searchable catalog. France (`FR`), New Caledonia (`NC`), and French
+Polynesia (`PF`) are separate destinations.
+
+### Automatic country lookup
+
+While `serve` runs, a background worker resolves entry GPS coordinates, falling
+back to exit GPS when entry coordinates are missing/invalid. Each position is
+cached in `country_lookup_cache` using six decimal places. New imports and GPS
+edits are discovered without waiting in API requests; completed positions are
+reused across dives and restarts. Country detection also works offshore when
+the provider has a country boundary for the location: the Small Brother test
+position returned Egypt. Unresolved locations remain unknown and can be corrected.
+
+The default external provider is **Nominatim/OpenStreetMap**. Using it sends only
+GPS coordinates and country-lookup options, without activity IDs, dates, names,
+or Garmin credentials. Requests identify the application and are paced at least
+**15 seconds apart** across processes sharing the database (four per minute).
+This intentionally makes the first backfill gradual. The worker respects
+`Retry-After`, limits retries, and stops repeating successful/unresolved lookups.
+Provider configuration/authentication rejections pause lookups until an explicit
+retry or restart. Run public Nominatim lookups on one machine; disable the worker
+on any additional deployment instances. Regional ISO identifiers distinguish
+French overseas destinations from France, even when the provider's sovereign
+country field says France.
+See the [Nominatim usage policy](https://operations.osmfoundation.org/policies/nominatim/).
+Display the returned attribution when showing geocoded data:
+[© OpenStreetMap contributors](https://www.openstreetmap.org/copyright), ODbL 1.0.
+
+| Environment variable | Default / purpose |
+| --- | --- |
+| `GARMIN_GEOCODING_ENABLED` | `true`; set `false` to disable outgoing country requests |
+| `GARMIN_GEOCODING_URL` | `https://nominatim.openstreetmap.org`; switchable origin for a compatible provider/self-hosted instance |
+| `GARMIN_GEOCODING_INTERVAL` | `15s`; public Nominatim requires at least this interval for recurring background work |
+| `GARMIN_GEOCODING_USER_AGENT` | Identifying app name and repository URL; customize with your app/contact details |
+
+- `GET /api/v1/countries/status`: active unique-position progress and attribution.
+- `POST /api/v1/countries/retry`: explicitly retry failed/unresolved positions.
+- `PATCH /api/v1/dives/{id}` with `{"country_code":"EG"}`: manual override.
+- The same patch with `{"country_code":null}`: restore automatic detection.
+
+Country overrides survive sync and single-dive refreshes. Cached detected
+countries remain available with outgoing requests disabled. Country names are
+localized locally and require no translation key.
+
+### Home-country history
+
+Create residence periods through the API. Dates are inclusive; `to: null`
+means the period has no end date. Periods cannot overlap (including shared end
+dates). For example:
+
+```sh
+curl -X POST http://127.0.0.1:8080/api/v1/home-countries \
+  -H 'Content-Type: application/json' \
+  -d '{"country_code":"FR","from":"2020-01-01","to":"2025-06-30"}'
+curl -X POST http://127.0.0.1:8080/api/v1/home-countries \
+  -H 'Content-Type: application/json' \
+  -d '{"country_code":"NC","from":"2025-07-01","to":null}'
+```
+
+Use `GET /api/v1/home-countries`, or GET/PATCH/DELETE
+`/api/v1/home-countries/{homeID}` to manage history. **No residence is assumed**:
+dives outside recorded periods wait before automatic trip assignment. Adding,
+editing, or removing a residence period recalculates automatic assignments.
+
+### Dive trips
+
+For dives with a known destination and matching residence period, automatic trips:
+
+- Include dives outside the home country.
+- Split on a destination-country change, a home-country dive, an uncovered/
+  unknown-country date, or a gap **longer than three calendar months** between
+  eligible dives. Month ends are clamped, e.g. January 31 → April 30.
+- Keep December/January dives together when those rules allow it. The first
+  linked dive supplies the primary country and starting year: `Égypte 2025` /
+  `Egypt 2025`, even if the trip finishes in 2026.
+- Retain stable trip IDs and custom metadata during ordinary rebuilds.
+
+Manual links can span countries and include any stored dives. Explicitly removed
+dives stay excluded from automatic regrouping until restored with
+`PATCH /api/v1/dives/{id}` and `{"trip_mode":"auto"}`.
+
+Trip fields include French/English name, year, country, subtitle, description,
+manual rating from **0 to 5** (nullable; zero is preserved), `cruise`,
+`operator_name`, `operator_website`, `operator_comment`, free-text `price`
+(approximate **per-person** cost), cover photo, and derived start/end dates.
+Trip editorial text uses the existing cached French-to-English DeepL worker;
+generated country/year names are bilingual immediately without DeepL.
+
+| Method / path | Purpose |
+| --- | --- |
+| `GET /api/v1/trips` | Paginated list; filters `name` (French/English), `year`, `country`, `from`, `to`, `min_rating`, `max_rating` |
+| `POST /api/v1/trips` | Create a manual trip; provide `year`, `country_code`, optional text/metadata and `dive_ids` |
+| `GET /api/v1/trips/{tripID}` | Metadata, linked `dive_ids`, own `media`, and `favorite_dive_media` |
+| `PATCH /api/v1/trips/{tripID}` | Update metadata, overrides, cover, or replace `dive_ids` |
+| `DELETE /api/v1/trips/{tripID}` | Soft-delete trip, excluding its dives; retain dives and original files/media metadata |
+| `GET /api/v1/trips/{tripID}/dives` | Linked dives with normal filters and cursor pagination |
+| `PUT /api/v1/trips/{tripID}/dives/{id}` | Idempotent manual assignment, moving the dive from its previous trip |
+| `DELETE /api/v1/trips/{tripID}/dives/{id}` | Remove a dive and persist its exclusion |
+| `POST /api/v1/trips/rebuild` | Recalculate automatic assignments without changing manual links/exclusions |
+
+Date filters match trips **overlapping** the inclusive range; trips without dives
+have empty dates and do not match date filters. Name search ignores case and
+accents. Missing ratings do not match rating bounds. The first/last linked dives
+determine dates. `name`, `year`, and `country_code` accept `null` in PATCH to
+restore generated values; `name_en` optionally supplies a custom English name.
+Replacing `dive_ids` makes listed links manual and persistently excludes removed
+members. Deleting a trip does not cause its current dives to reappear in a new
+automatic trip. Empty, untouched automatic groups are hidden from the trip list
+unless they contain trip media. Backfills prefer retaining a customized/media-
+bearing group when joining temporary automatic groups.
+
+### Trip media and favorite dive media
+
+Trips own independent photos/videos under
+`assets/trips/<tripID>/<original filename>`. The normal startup scan and
+`POST /api/v1/media/scan` index these directories too, preserving descriptions,
+projection settings and attachment IDs. Uploads, original filenames, 360-degree
+hints, JPEG thumbnails, range requests, and duplicate-name protection behave like
+dive media:
+
+```sh
+curl -F 'file=@Le bateau.jpeg' http://127.0.0.1:8080/api/v1/trips/TRIP_ID/media
+```
+
+GET/POST `/api/v1/trips/{tripID}/media`, GET/PATCH/DELETE
+`/api/v1/trips/{tripID}/media/{mediaID}`, and the corresponding `/thumbnail`
+endpoint manage trip media. Originals use `/assets/trips/{tripID}/{filename}`.
+Select a trip-owned **photo** with `PATCH /api/v1/trips/{tripID}` and
+`{"cover_media_id":"MEDIA_ID"}`; null clears it. Removing the selected photo
+clears the cover automatically. Trip deletion retains original files and metadata
+but removes the trip and its media from the active APIs.
+
+Mark a dive photo **or video** with:
+
+```sh
+curl -X PATCH http://127.0.0.1:8080/api/v1/dives/DIVE_ID/media/MEDIA_ID \
+  -H 'Content-Type: application/json' -d '{"favorite":true}'
+```
+
+Set false to unmark it. Favorites survive rescans and are not copied into trip
+storage. `GET /api/v1/media/favorites` lists all favorites with pagination; add
+`?trip_id=TRIP_ID` to select favorites from currently linked dives. Trip detail
+returns its own `media` separately from `favorite_dive_media` (first 100; use
+`favorites_next_cursor` with the favorites endpoint to continue). Moving or
+removing a dive immediately updates that collection.
 
 ## Garmin request pacing
 
@@ -284,7 +459,8 @@ The parser uses legacy `notes` first and falls back per section to the activity
 preserved. Existing records are backfilled locally when the database opens after
 upgrade, without downloading dives again. As with other stored dive metadata,
 these fields reflect the imported text; normal incremental sync does not refresh
-later edits made on Garmin.
+later edits made on Garmin. Use `sync -activity-id <activityID>` to fetch edited
+notes and update the parsed fields for one dive.
 
 ### French and English translations
 

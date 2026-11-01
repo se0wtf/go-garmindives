@@ -6,14 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
-	"strconv"
 )
 
 var errMediaNotFound = errors.New("media not found")
 
 type mediaItem struct {
 	ID                   string          `json:"id"`
-	DiveID               int64           `json:"dive_id"`
+	DiveID               int64           `json:"dive_id,omitempty"`
+	TripID               string          `json:"trip_id,omitempty"`
+	Favorite             bool            `json:"favorite"`
 	Filename             string          `json:"filename"`
 	Kind                 string          `json:"kind"`
 	ContentType          string          `json:"content_type"`
@@ -43,15 +44,23 @@ type mediaItem struct {
 
 const mediaColumns = `id, dive_id, filename, kind, content_type, size_bytes, modified_ns,
 	sha256, width, height, duration_seconds, stereo_layout, detected_stereo_layout,
-	projection, caption, description, thumbnail_status, thumbnail_error, thumbnail_key, probe_json, created_at, updated_at`
+	projection, caption, description, thumbnail_status, thumbnail_error, thumbnail_key, probe_json, created_at, updated_at, favorite`
 
 func scanMedia(row rowScanner) (mediaItem, error) {
+	return scanOwnedMedia(row, mediaOwner{})
+}
+
+func scanOwnedMedia(row rowScanner, owner mediaOwner) (mediaItem, error) {
 	var m mediaItem
 	var probe string
-	err := row.Scan(&m.ID, &m.DiveID, &m.Filename, &m.Kind, &m.ContentType, &m.SizeBytes,
+	var ownerID any = &m.DiveID
+	if owner.TripID != "" {
+		ownerID = &m.TripID
+	}
+	err := row.Scan(&m.ID, ownerID, &m.Filename, &m.Kind, &m.ContentType, &m.SizeBytes,
 		&m.ModifiedNS, &m.SHA256, &m.Width, &m.Height, &m.DurationSeconds, &m.StereoLayout,
 		&m.DetectedStereoLayout, &m.Projection, &m.Caption, &m.Description, &m.ThumbnailStatus,
-		&m.ThumbnailError, &m.ThumbnailKey, &probe, &m.CreatedAt, &m.UpdatedAt)
+		&m.ThumbnailError, &m.ThumbnailKey, &probe, &m.CreatedAt, &m.UpdatedAt, &m.Favorite)
 	if errors.Is(err, sql.ErrNoRows) {
 		return m, errMediaNotFound
 	}
@@ -65,11 +74,11 @@ func scanMedia(row rowScanner) (mediaItem, error) {
 
 func (m *mediaItem) setURLs() {
 	m.resolveProjection()
-	id := strconv.FormatInt(m.DiveID, 10)
-	m.URL = "/assets/" + id + "/" + url.PathEscape(m.Filename)
+	owner := m.owner()
+	m.URL = "/assets/" + owner.directory() + "/" + url.PathEscape(m.Filename)
 	m.ThumbnailURL = ""
 	if m.ThumbnailStatus == "ready" {
-		m.ThumbnailURL = "/api/v1/dives/" + id + "/media/" + m.ID + "/thumbnail?v=" + m.ThumbnailKey
+		m.ThumbnailURL = owner.apiPath() + "/media/" + m.ID + "/thumbnail?v=" + m.ThumbnailKey
 	}
 }
 
@@ -94,14 +103,17 @@ func (m *mediaItem) resolveProjection() {
 }
 
 func (s *sqlStore) mediaForDive(ctx context.Context, diveID int64) ([]mediaItem, error) {
-	rows, err := s.db.QueryContext(ctx, s.bind(`SELECT `+mediaColumns+` FROM dive_media WHERE dive_id = ? ORDER BY filename, id`), diveID)
+	return s.mediaForOwner(ctx, mediaOwner{DiveID: diveID})
+}
+func (s *sqlStore) mediaForOwner(ctx context.Context, owner mediaOwner) ([]mediaItem, error) {
+	rows, err := s.db.QueryContext(ctx, s.bind(`SELECT `+owner.columns()+` FROM `+owner.table()+` WHERE `+owner.column()+` = ? ORDER BY filename, id`), owner.value())
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	items := []mediaItem{}
 	for rows.Next() {
-		item, err := scanMedia(rows)
+		item, err := scanOwnedMedia(rows, owner)
 		if err != nil {
 			return nil, err
 		}
@@ -111,20 +123,26 @@ func (s *sqlStore) mediaForDive(ctx context.Context, diveID int64) ([]mediaItem,
 }
 
 func (s *sqlStore) mediaByID(ctx context.Context, diveID int64, id string) (mediaItem, error) {
-	return scanMedia(s.db.QueryRowContext(ctx, s.bind(`SELECT `+mediaColumns+` FROM dive_media WHERE dive_id = ? AND id = ?`), diveID, id))
+	return s.ownedMediaByID(ctx, mediaOwner{DiveID: diveID}, id)
+}
+func (s *sqlStore) ownedMediaByID(ctx context.Context, owner mediaOwner, id string) (mediaItem, error) {
+	return scanOwnedMedia(s.db.QueryRowContext(ctx, s.bind(`SELECT `+owner.columns()+` FROM `+owner.table()+` WHERE `+owner.column()+` = ? AND id = ?`), owner.value(), id), owner)
 }
 
 func (s *sqlStore) listMedia(ctx context.Context, diveID int64, limit int, afterName, afterID string) ([]mediaItem, bool, error) {
-	rows, err := s.db.QueryContext(ctx, s.bind(`SELECT `+mediaColumns+` FROM dive_media
-		WHERE dive_id = ? AND (filename > ? OR (filename = ? AND id > ?))
-		ORDER BY filename, id LIMIT ?`), diveID, afterName, afterName, afterID, limit+1)
+	return s.listOwnedMedia(ctx, mediaOwner{DiveID: diveID}, limit, afterName, afterID)
+}
+func (s *sqlStore) listOwnedMedia(ctx context.Context, owner mediaOwner, limit int, afterName, afterID string) ([]mediaItem, bool, error) {
+	rows, err := s.db.QueryContext(ctx, s.bind(`SELECT `+owner.columns()+` FROM `+owner.table()+`
+		WHERE `+owner.column()+` = ? AND (filename > ? OR (filename = ? AND id > ?))
+		ORDER BY filename, id LIMIT ?`), owner.value(), afterName, afterName, afterID, limit+1)
 	if err != nil {
 		return nil, false, err
 	}
 	defer rows.Close()
 	items := []mediaItem{}
 	for rows.Next() {
-		item, err := scanMedia(rows)
+		item, err := scanOwnedMedia(rows, owner)
 		if err != nil {
 			return nil, false, err
 		}
@@ -138,24 +156,28 @@ func (s *sqlStore) listMedia(ctx context.Context, diveID int64, limit int, after
 }
 
 func (s *sqlStore) mediaByFilename(ctx context.Context, diveID int64, name string) (mediaItem, error) {
-	return scanMedia(s.db.QueryRowContext(ctx, s.bind(`SELECT `+mediaColumns+` FROM dive_media WHERE dive_id = ? AND filename = ?`), diveID, name))
+	return s.ownedMediaByFilename(ctx, mediaOwner{DiveID: diveID}, name)
+}
+func (s *sqlStore) ownedMediaByFilename(ctx context.Context, owner mediaOwner, name string) (mediaItem, error) {
+	return scanOwnedMedia(s.db.QueryRowContext(ctx, s.bind(`SELECT `+owner.columns()+` FROM `+owner.table()+` WHERE `+owner.column()+` = ? AND filename = ?`), owner.value(), name), owner)
 }
 
 func (s *sqlStore) saveMedia(ctx context.Context, m mediaItem) error {
-	_, err := s.db.ExecContext(ctx, s.bind(`INSERT INTO dive_media (`+mediaColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT (dive_id, filename) DO UPDATE SET kind=excluded.kind,
+	owner := m.owner()
+	_, err := s.db.ExecContext(ctx, s.bind(`INSERT INTO `+owner.table()+` (`+owner.columns()+`)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (`+owner.column()+`, filename) DO UPDATE SET kind=excluded.kind,
 		content_type=excluded.content_type, size_bytes=excluded.size_bytes, modified_ns=excluded.modified_ns,
 		sha256=excluded.sha256, width=excluded.width, height=excluded.height,
 		duration_seconds=excluded.duration_seconds, stereo_layout=excluded.stereo_layout,
 		detected_stereo_layout=excluded.detected_stereo_layout, projection=excluded.projection,
 		caption=excluded.caption, description=excluded.description, thumbnail_status=excluded.thumbnail_status,
 		thumbnail_error=excluded.thumbnail_error, thumbnail_key=excluded.thumbnail_key,
-		probe_json=excluded.probe_json, updated_at=excluded.updated_at`),
-		m.ID, m.DiveID, m.Filename, m.Kind, m.ContentType, m.SizeBytes, m.ModifiedNS,
+		probe_json=excluded.probe_json, updated_at=excluded.updated_at,favorite=excluded.favorite`),
+		m.ID, owner.value(), m.Filename, m.Kind, m.ContentType, m.SizeBytes, m.ModifiedNS,
 		m.SHA256, m.Width, m.Height, m.DurationSeconds, m.StereoLayout, m.DetectedStereoLayout,
 		m.Projection, m.Caption, m.Description, m.ThumbnailStatus, m.ThumbnailError, m.ThumbnailKey,
-		string(m.Probe), m.CreatedAt, m.UpdatedAt)
+		string(m.Probe), m.CreatedAt, m.UpdatedAt, boolNumber(m.Favorite))
 	if err == nil {
 		s.translationsChanged()
 	}
@@ -163,7 +185,8 @@ func (s *sqlStore) saveMedia(ctx context.Context, m mediaItem) error {
 }
 
 func (s *sqlStore) removeMedia(ctx context.Context, m mediaItem) error {
-	_, err := s.db.ExecContext(ctx, s.bind(`DELETE FROM dive_media WHERE dive_id = ? AND id = ?`), m.DiveID, m.ID)
+	owner := m.owner()
+	_, err := s.db.ExecContext(ctx, s.bind(`DELETE FROM `+owner.table()+` WHERE `+owner.column()+` = ? AND id = ?`), owner.value(), m.ID)
 	if err == nil {
 		s.translationsChanged()
 	}

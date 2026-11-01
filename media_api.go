@@ -34,6 +34,14 @@ func (s *apiServer) registerMediaRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /assets/{id}/{filename}", s.getAsset)
 	mux.HandleFunc("POST /api/v1/media/scan", s.scanMedia)
 	mux.HandleFunc("GET /api/v1/media/status", s.mediaStatus)
+	mux.HandleFunc("GET /api/v1/media/favorites", s.listFavoriteMedia)
+	mux.HandleFunc("GET /api/v1/trips/{tripID}/media", s.listMedia)
+	mux.HandleFunc("POST /api/v1/trips/{tripID}/media", s.uploadMedia)
+	mux.HandleFunc("GET /api/v1/trips/{tripID}/media/{mediaID}", s.getMedia)
+	mux.HandleFunc("PATCH /api/v1/trips/{tripID}/media/{mediaID}", s.patchMedia)
+	mux.HandleFunc("DELETE /api/v1/trips/{tripID}/media/{mediaID}", s.deleteMedia)
+	mux.HandleFunc("GET /api/v1/trips/{tripID}/media/{mediaID}/thumbnail", s.getThumbnail)
+	mux.HandleFunc("GET /assets/trips/{tripID}/{filename}", s.getAsset)
 }
 
 func (s *apiServer) mediaDiveID(w http.ResponseWriter, r *http.Request) (int64, bool) {
@@ -56,7 +64,7 @@ func (s *apiServer) mediaDiveID(w http.ResponseWriter, r *http.Request) (int64, 
 func (s *apiServer) mediaError(w http.ResponseWriter, r *http.Request, err error) {
 	var sizeErr *http.MaxBytesError
 	switch {
-	case errors.Is(err, errMediaNotFound), errors.Is(err, errDiveNotFound), errors.Is(err, fs.ErrNotExist):
+	case errors.Is(err, errMediaNotFound), errors.Is(err, errDiveNotFound), errors.Is(err, errTripNotFound), errors.Is(err, fs.ErrNotExist):
 		writeAPIError(w, http.StatusNotFound, "not_found", "dive or media not found")
 	case errors.Is(err, errMediaConflict):
 		writeAPIError(w, http.StatusConflict, "conflict", err.Error())
@@ -72,7 +80,7 @@ func (s *apiServer) mediaError(w http.ResponseWriter, r *http.Request, err error
 }
 
 func (s *apiServer) listMedia(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.mediaDiveID(w, r)
+	owner, ok := s.mediaRequestOwner(w, r, true)
 	if !ok {
 		return
 	}
@@ -88,7 +96,7 @@ func (s *apiServer) listMedia(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	items, more, err := s.store.listMedia(r.Context(), id, limit, cursor.Filename, cursor.ID)
+	items, more, err := s.store.listOwnedMedia(r.Context(), owner, limit, cursor.Filename, cursor.ID)
 	if err != nil {
 		s.internalError(w, r, err)
 		return
@@ -106,11 +114,11 @@ func (s *apiServer) listMedia(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *apiServer) getMedia(w http.ResponseWriter, r *http.Request) {
-	id, ok := diveID(w, r)
+	owner, ok := s.mediaRequestOwner(w, r, true)
 	if !ok {
 		return
 	}
-	m, err := s.store.mediaByID(r.Context(), id, r.PathValue("mediaID"))
+	m, err := s.store.ownedMediaByID(r.Context(), owner, r.PathValue("mediaID"))
 	if err != nil {
 		s.mediaError(w, r, err)
 		return
@@ -119,7 +127,7 @@ func (s *apiServer) getMedia(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *apiServer) uploadMedia(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.mediaDiveID(w, r)
+	owner, ok := s.mediaRequestOwner(w, r, true)
 	if !ok {
 		return
 	}
@@ -145,7 +153,7 @@ func (s *apiServer) uploadMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var endErr error
-	m, err := l.Upload(r.Context(), id, name, part, func() error {
+	m, err := l.uploadOwned(r.Context(), owner, name, part, func() error {
 		_, err := reader.NextPart()
 		if errors.Is(err, io.EOF) {
 			return nil
@@ -165,12 +173,12 @@ func (s *apiServer) uploadMedia(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	w.Header().Set("Location", "/api/v1/dives/"+strconv.FormatInt(id, 10)+"/media/"+m.ID)
+	w.Header().Set("Location", owner.apiPath()+"/media/"+m.ID)
 	s.writeTranslatedJSON(w, r, http.StatusCreated, &m)
 }
 
 func (s *apiServer) patchMedia(w http.ResponseWriter, r *http.Request) {
-	id, ok := diveID(w, r)
+	owner, ok := s.mediaRequestOwner(w, r, true)
 	if !ok {
 		return
 	}
@@ -191,7 +199,11 @@ func (s *apiServer) patchMedia(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	m, err := s.store.media.Patch(r.Context(), id, r.PathValue("mediaID"), patch)
+	if owner.TripID != "" && patch.Favorite != nil {
+		writeAPIError(w, 400, "invalid_request", "favorite applies to dive media")
+		return
+	}
+	m, err := s.store.media.patchOwned(r.Context(), owner, r.PathValue("mediaID"), patch)
 	if err != nil {
 		s.mediaError(w, r, err)
 		return
@@ -200,11 +212,11 @@ func (s *apiServer) patchMedia(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *apiServer) deleteMedia(w http.ResponseWriter, r *http.Request) {
-	id, ok := diveID(w, r)
+	owner, ok := s.mediaRequestOwner(w, r, true)
 	if !ok {
 		return
 	}
-	if err := s.store.media.Delete(r.Context(), id, r.PathValue("mediaID")); err != nil {
+	if err := s.store.media.deleteOwned(r.Context(), owner, r.PathValue("mediaID")); err != nil {
 		s.mediaError(w, r, err)
 		return
 	}
@@ -212,7 +224,7 @@ func (s *apiServer) deleteMedia(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *apiServer) getAsset(w http.ResponseWriter, r *http.Request) {
-	id, ok := diveID(w, r)
+	owner, ok := s.mediaRequestOwner(w, r, true)
 	if !ok {
 		return
 	}
@@ -221,7 +233,7 @@ func (s *apiServer) getAsset(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusNotFound, "not_found", "media not found")
 		return
 	}
-	m, err := s.store.mediaByFilename(r.Context(), id, name)
+	m, err := s.store.ownedMediaByFilename(r.Context(), owner, name)
 	if err != nil {
 		s.mediaError(w, r, err)
 		return
@@ -230,11 +242,11 @@ func (s *apiServer) getAsset(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *apiServer) getThumbnail(w http.ResponseWriter, r *http.Request) {
-	id, ok := diveID(w, r)
+	owner, ok := s.mediaRequestOwner(w, r, true)
 	if !ok {
 		return
 	}
-	m, err := s.store.mediaByID(r.Context(), id, r.PathValue("mediaID"))
+	m, err := s.store.ownedMediaByID(r.Context(), owner, r.PathValue("mediaID"))
 	if err != nil {
 		s.mediaError(w, r, err)
 		return
@@ -247,7 +259,7 @@ func (s *apiServer) getThumbnail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *apiServer) serveMediaFile(w http.ResponseWriter, r *http.Request, m mediaItem, thumbnail bool) {
-	path, contentType, etag := mediaPath(m.DiveID, m.Filename), m.ContentType, m.SHA256
+	path, contentType, etag := m.owner().path(m.Filename), m.ContentType, m.SHA256
 	name := m.Filename
 	if thumbnail {
 		path, contentType, etag = ".thumbnails/"+m.ThumbnailKey+".jpg", "image/jpeg", m.ThumbnailKey
@@ -303,7 +315,7 @@ func (s *apiServer) mediaStatus(w http.ResponseWriter, r *http.Request) {
 		COALESCE(SUM(CASE WHEN kind='photo' THEN 1 ELSE 0 END),0),
 		COALESCE(SUM(CASE WHEN kind='video' THEN 1 ELSE 0 END),0),
 		COALESCE(SUM(CASE WHEN thumbnail_status='ready' THEN 1 ELSE 0 END),0),
-		COALESCE(SUM(CASE WHEN thumbnail_status='error' THEN 1 ELSE 0 END),0) FROM dive_media`).Scan(&total, &photos, &videos, &ready, &failed)
+		COALESCE(SUM(CASE WHEN thumbnail_status='error' THEN 1 ELSE 0 END),0) FROM (SELECT kind,thumbnail_status FROM dive_media UNION ALL SELECT kind,thumbnail_status FROM trip_media) AS all_media`).Scan(&total, &photos, &videos, &ready, &failed)
 	if err != nil {
 		s.internalError(w, r, err)
 		return

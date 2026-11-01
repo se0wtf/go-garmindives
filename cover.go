@@ -3,9 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 )
 
@@ -49,27 +47,10 @@ func (s *apiServer) patchDive(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var patch struct {
-		CoverMediaID json.RawMessage `json:"cover_media_id"`
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&patch); err != nil || len(patch.CoverMediaID) == 0 {
-		writeAPIError(w, http.StatusBadRequest, "invalid_request", "provide cover_media_id as a photo ID or null to clear the cover")
+	var patch divePatch
+	if !decodeRequest(w, r, &patch) {
 		return
 	}
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		writeAPIError(w, http.StatusBadRequest, "invalid_request", "request must contain one JSON object")
-		return
-	}
-	var mediaID *string
-	if err := json.Unmarshal(patch.CoverMediaID, &mediaID); err != nil || (mediaID != nil && *mediaID == "") {
-		writeAPIError(w, http.StatusBadRequest, "invalid_request", "cover_media_id must be a nonempty photo ID or null")
-		return
-	}
-	// Serialize selection with media deletions/scans in the running server.
 	if s.store.media != nil {
 		mediaDeadlines(w)
 		if err := s.store.media.lock(r.Context()); err != nil {
@@ -78,22 +59,18 @@ func (s *apiServer) patchDive(w http.ResponseWriter, r *http.Request) {
 		}
 		defer s.store.media.unlock()
 	}
-	item, err := s.store.setDiveCover(r.Context(), id, mediaID)
+	item, err := s.store.patchDiveTravel(r.Context(), id, patch)
 	switch {
-	case errors.Is(err, errInvalidCover):
-		writeAPIError(w, http.StatusBadRequest, "invalid_request", err.Error())
-	case errors.Is(err, errDiveNotFound):
-		writeAPIError(w, http.StatusNotFound, "not_found", "dive not found")
+	case errors.Is(err, errInvalidCover), errors.Is(err, errInvalidDivePatch):
+		writeAPIError(w, 400, "invalid_request", err.Error())
+	case errors.Is(err, errDiveNotFound), errors.Is(err, errTripNotFound):
+		writeAPIError(w, 404, "not_found", err.Error())
 	case err != nil:
 		s.internalError(w, r, err)
 	default:
 		if s.logger != nil {
-			coverID := ""
-			if item.CoverMediaID != nil {
-				coverID = *item.CoverMediaID
-			}
-			s.logger.Info("dive cover updated", "activity_id", id, "cover_media_id", coverID)
+			s.logger.Info("dive metadata updated", "activity_id", id)
 		}
-		s.writeTranslatedJSON(w, r, http.StatusOK, &item)
+		s.writeTranslatedJSON(w, r, 200, &item)
 	}
 }

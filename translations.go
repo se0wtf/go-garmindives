@@ -17,12 +17,16 @@ import (
 )
 
 type englishTranslation struct {
-	Status      string   `json:"status"`
-	Comment     string   `json:"comment,omitempty"`
-	Highlights  []string `json:"highlights,omitempty"`
-	Caption     string   `json:"caption,omitempty"`
-	Description string   `json:"description,omitempty"`
-	Error       string   `json:"error,omitempty"`
+	Status          string   `json:"status"`
+	Name            string   `json:"name,omitempty"`
+	Subtitle        string   `json:"subtitle,omitempty"`
+	OperatorComment string   `json:"operator_comment,omitempty"`
+	Price           string   `json:"price,omitempty"`
+	Comment         string   `json:"comment,omitempty"`
+	Highlights      []string `json:"highlights,omitempty"`
+	Caption         string   `json:"caption,omitempty"`
+	Description     string   `json:"description,omitempty"`
+	Error           string   `json:"error,omitempty"`
 }
 
 type translations struct {
@@ -33,23 +37,30 @@ type translations struct {
 // includes the provider/settings version, target locale, and glossary. It never
 // includes an API key, entity ID, or filename, allowing identical text to reuse it.
 type translationSource struct {
-	Kind        string   `json:"kind"`
-	Comment     string   `json:"comment,omitempty"`
-	Highlights  []string `json:"highlights,omitempty"`
-	Caption     string   `json:"caption,omitempty"`
-	Description string   `json:"description,omitempty"`
+	Kind            string   `json:"kind"`
+	Name            string   `json:"name,omitempty"`
+	Subtitle        string   `json:"subtitle,omitempty"`
+	OperatorComment string   `json:"operator_comment,omitempty"`
+	Price           string   `json:"price,omitempty"`
+	Comment         string   `json:"comment,omitempty"`
+	Highlights      []string `json:"highlights,omitempty"`
+	Caption         string   `json:"caption,omitempty"`
+	Description     string   `json:"description,omitempty"`
 }
 
 func (source translationSource) texts() []string {
 	if source.Kind == "dive" {
 		return append([]string{source.Comment}, source.Highlights...)
 	}
+	if source.Kind == "trip" {
+		return []string{source.Name, source.Subtitle, source.Description, source.OperatorComment, source.Price}
+	}
 	return []string{source.Caption, source.Description}
 }
 
 func (source translationSource) context() string {
 	text := source.Comment
-	if source.Kind == "media" {
+	if source.Kind == "media" || source.Kind == "trip" {
 		text = source.Description
 	}
 	// Supply surrounding prose and domain context, not translation instructions.
@@ -85,6 +96,9 @@ func (source translationSource) translated(values []*string) (englishTranslation
 		for _, text := range values[1:] {
 			result.Highlights = append(result.Highlights, *text)
 		}
+	} else if source.Kind == "trip" {
+		result.Name, result.Subtitle, result.Description, result.OperatorComment = *values[0], *values[1], *values[2], *values[3]
+		result.Price = *values[4]
 	} else {
 		result.Caption, result.Description = *values[0], *values[1]
 	}
@@ -273,7 +287,7 @@ func (s *translationService) reconcile(ctx context.Context) error {
 	if closeErr != nil {
 		return closeErr
 	}
-	rows, err = s.store.db.QueryContext(ctx, `SELECT caption, description FROM dive_media ORDER BY id`)
+	rows, err = s.store.db.QueryContext(ctx, `SELECT caption, description FROM dive_media UNION ALL SELECT caption,description FROM trip_media`)
 	if err != nil {
 		return err
 	}
@@ -293,6 +307,24 @@ func (s *translationService) reconcile(ctx context.Context) error {
 	}
 	if closeErr != nil {
 		return closeErr
+	}
+	rows, err = s.store.db.QueryContext(ctx, `SELECT name,name_en,name_override,subtitle,description,operator_comment,price FROM dive_trips WHERE deleted=0`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var t diveTrip
+		if err := rows.Scan(&t.Name, &t.NameEN, &t.NameOverridden, &t.Subtitle, &t.Description, &t.OperatorComment, &t.Price); err != nil {
+			rows.Close()
+			return err
+		}
+		source := t.translationSource()
+		if !source.empty() {
+			sources = append(sources, source)
+		}
+	}
+	if err := closeRows(rows); err != nil {
+		return err
 	}
 	tx, err := s.store.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -342,10 +374,33 @@ func (s *translationService) saveJob(ctx context.Context, job translationJob, re
 		return err
 	}
 	now := s.now()
-	_, err = s.store.db.ExecContext(ctx, s.store.bind(`UPDATE translation_cache SET result_json = ?, status = ?,
+	tx, err := s.store.beginTravelTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	updated, err := tx.ExecContext(ctx, s.store.bind(`UPDATE translation_cache SET result_json = ?, status = ?,
 		last_error = ?, attempts = ?, retry_at = ?, lease_owner = '', lease_until = 0, updated_at = ?
 		WHERE source_hash = ? AND lease_owner = ?`), string(raw), status, code, attempts, now.Add(delay).UnixMilli(), now.UnixMilli(), job.key, s.owner)
-	return err
+	if err != nil {
+		return err
+	}
+	count, err := updated.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count > 0 && status == "ready" {
+		var source translationSource
+		if json.Unmarshal([]byte(job.sourceJSON), &source) == nil && source.Kind == "trip" && source.Name != "" {
+			if english, err := source.translated(result); err == nil {
+				_, err = tx.ExecContext(ctx, s.store.bind(`UPDATE dive_trips SET search_name=? WHERE name_override=1 AND name_en='' AND name=? AND subtitle=? AND description=? AND operator_comment=? AND price=? AND deleted=0`), searchText(source.Name+" "+english.Name), source.Name, source.Subtitle, source.Description, source.OperatorComment, source.Price)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return tx.Commit()
 }
 
 // Process at most one provider batch. Successful batches are saved immediately,

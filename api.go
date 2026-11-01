@@ -60,6 +60,7 @@ func newAPIHandler(store *sqlStore, logger *charmLog.Logger) http.Handler {
 	mux := http.NewServeMux()
 	registerDocumentationRoutes(mux)
 	server.registerTranslationRoutes(mux)
+	server.registerTravelRoutes(mux)
 	mux.HandleFunc("GET /api/v1/health", server.health)
 	mux.HandleFunc("GET /api/v1/dives", server.listDives)
 	mux.HandleFunc("GET /api/v1/dives/{id}", server.getDive)
@@ -72,7 +73,7 @@ func newAPIHandler(store *sqlStore, logger *charmLog.Logger) http.Handler {
 func apiMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, POST, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Range, If-None-Match, If-Modified-Since, If-Range")
 		w.Header().Set("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges, ETag, Last-Modified, Content-Disposition, Location")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -108,6 +109,27 @@ func (s *apiServer) listDives(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	options := diveListOptions{Limit: limit, From: from, To: to, Location: strings.TrimSpace(r.URL.Query().Get("location"))}
+	if raw := r.URL.Query().Get("year"); raw != "" {
+		year, err := strconv.Atoi(raw)
+		if err != nil || year < 1 || year > 9999 {
+			writeAPIError(w, 400, "invalid_request", "year must be 1 to 9999")
+			return
+		}
+		options.Year = year
+	}
+	if raw := r.URL.Query().Get("country"); raw != "" {
+		c, err := resolveCountry(raw)
+		if err != nil {
+			writeAPIError(w, 400, "invalid_request", err.Error())
+			return
+		}
+		options.Country = c.Code
+	}
+	options.TripID = r.URL.Query().Get("trip_id")
+	if options.TripID != "" && !validTripID(options.TripID) {
+		writeAPIError(w, 400, "invalid_request", "invalid trip_id")
+		return
+	}
 	if cursor := r.URL.Query().Get("cursor"); cursor != "" {
 		var decoded diveCursor
 		if err := decodeCursor(cursor, &decoded); err != nil || decoded.ID <= 0 {

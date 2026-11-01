@@ -158,6 +158,9 @@ func (l *mediaLibrary) logFile(message string, m mediaItem, err error) {
 		return
 	}
 	args := []any{"activity_id", m.DiveID, "filename", m.Filename}
+	if m.TripID != "" {
+		args = []any{"trip_id", m.TripID, "filename", m.Filename}
+	}
 	if err != nil {
 		l.logger.Warn(message, append(args, "err", err)...)
 	} else {
@@ -189,12 +192,31 @@ func (l *mediaLibrary) Scan(ctx context.Context, force bool) (result mediaScanRe
 	for _, id := range ids {
 		known[id] = true
 	}
+	owners := make([]mediaOwner, 0, len(ids))
+	for _, id := range ids {
+		owners = append(owners, mediaOwner{DiveID: id})
+	}
+	tripRows, err := l.store.db.QueryContext(ctx, `SELECT id FROM dive_trips ORDER BY id`)
+	if err != nil {
+		return result, err
+	}
+	for tripRows.Next() {
+		var tripID string
+		if err := tripRows.Scan(&tripID); err != nil {
+			tripRows.Close()
+			return result, err
+		}
+		owners = append(owners, mediaOwner{TripID: tripID})
+	}
+	if err := closeRows(tripRows); err != nil {
+		return result, err
+	}
 	entries, err := fs.ReadDir(l.root.FS(), ".")
 	if err != nil {
 		return result, err
 	}
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), ".") {
+		if strings.HasPrefix(entry.Name(), ".") || entry.Name() == "trips" {
 			continue
 		}
 		id, parseErr := strconv.ParseInt(entry.Name(), 10, 64)
@@ -205,15 +227,20 @@ func (l *mediaLibrary) Scan(ctx context.Context, force bool) (result mediaScanRe
 			}
 		}
 	}
-	for _, id := range ids {
+	for _, owner := range owners {
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		old, err := l.store.mediaForDive(ctx, id)
+		old, err := l.store.mediaForOwner(ctx, owner)
 		if err != nil {
 			return result, err
 		}
-		dir := strconv.FormatInt(id, 10)
+		if owner.TripID != "" {
+			if parent, err := l.root.Lstat("trips"); err == nil && !parent.IsDir() {
+				continue
+			}
+		}
+		dir := owner.directory()
 		info, err := l.root.Lstat(dir)
 		if err == nil && !info.IsDir() {
 			// In particular, never scan symlinked activity directories.
@@ -239,13 +266,13 @@ func (l *mediaLibrary) Scan(ctx context.Context, force bool) (result mediaScanRe
 			}
 			seen[name] = true
 			result.Scanned++
-			m, action, err := l.indexFile(ctx, id, name, force)
+			m, action, err := l.indexOwnedFile(ctx, owner, name, force)
 			if err != nil {
 				if ctx.Err() != nil {
 					return result, ctx.Err()
 				}
 				result.Failed++
-				l.logFile("could not index media", mediaItem{DiveID: id, Filename: name}, err)
+				l.logFile("could not index media", mediaItem{DiveID: owner.DiveID, TripID: owner.TripID, Filename: name}, err)
 				continue
 			}
 			switch action {
@@ -287,13 +314,16 @@ func (r mediaContextReader) Read(p []byte) (int, error) {
 }
 
 func (l *mediaLibrary) indexFile(ctx context.Context, id int64, name string, force bool) (mediaItem, string, error) {
-	m, err := l.store.mediaByFilename(ctx, id, name)
+	return l.indexOwnedFile(ctx, mediaOwner{DiveID: id}, name, force)
+}
+func (l *mediaLibrary) indexOwnedFile(ctx context.Context, owner mediaOwner, name string, force bool) (mediaItem, string, error) {
+	m, err := l.store.ownedMediaByFilename(ctx, owner, name)
 	fresh := errors.Is(err, errMediaNotFound)
 	if err != nil && !fresh {
 		return m, "", err
 	}
 	old := m
-	input, err := l.root.Open(mediaPath(id, name))
+	input, err := l.root.Open(owner.path(name))
 	if err != nil {
 		return m, "", err
 	}
@@ -315,7 +345,7 @@ func (l *mediaLibrary) indexFile(ctx context.Context, id int64, name string, for
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if fresh {
-		m = mediaItem{ID: newMediaID(), DiveID: id, Filename: name, StereoLayout: "auto", Projection: "auto", CreatedAt: now}
+		m = mediaItem{ID: newMediaID(), DiveID: owner.DiveID, TripID: owner.TripID, Filename: name, StereoLayout: "auto", Projection: "auto", CreatedAt: now}
 	}
 	m.Kind, m.ContentType = mediaType(name)
 	m.SizeBytes, m.ModifiedNS = info.Size(), info.ModTime().UnixNano()
@@ -339,7 +369,7 @@ func (l *mediaLibrary) indexFile(ctx context.Context, id int64, name string, for
 	}
 	// Files copied in place may still be changing: keep their old index until a
 	// later scan sees a stable file. API uploads are published only when complete.
-	after, statErr := l.root.Stat(mediaPath(id, name))
+	after, statErr := l.root.Stat(owner.path(name))
 	if statErr != nil || !os.SameFile(info, after) || after.Size() != info.Size() || !after.ModTime().Equal(info.ModTime()) {
 		if m.ThumbnailKey != old.ThumbnailKey {
 			l.removeThumbnail(m)
@@ -412,6 +442,9 @@ func (l *mediaLibrary) removeThumbnail(m mediaItem) {
 
 // validateEnd verifies the multipart trailer before publishing a staged file.
 func (l *mediaLibrary) Upload(ctx context.Context, id int64, name string, source io.Reader, validateEnd func() error) (mediaItem, error) {
+	return l.uploadOwned(ctx, mediaOwner{DiveID: id}, name, source, validateEnd)
+}
+func (l *mediaLibrary) uploadOwned(ctx context.Context, owner mediaOwner, name string, source io.Reader, validateEnd func() error) (mediaItem, error) {
 	if !validMediaFilename(name) {
 		return mediaItem{}, errInvalidMedia
 	}
@@ -447,17 +480,20 @@ func (l *mediaLibrary) Upload(ctx context.Context, id int64, name string, source
 		return mediaItem{}, err
 	}
 	defer l.unlock()
-	exists, err := l.store.diveExists(ctx, id)
+	exists, err := l.store.ownerExists(ctx, owner)
 	if err != nil {
 		return mediaItem{}, err
 	}
 	if !exists {
+		if owner.TripID != "" {
+			return mediaItem{}, errTripNotFound
+		}
 		return mediaItem{}, errDiveNotFound
 	}
-	if err := l.root.MkdirAll(strconv.FormatInt(id, 10), 0o755); err != nil {
+	if err := l.root.MkdirAll(owner.directory(), 0o755); err != nil {
 		return mediaItem{}, err
 	}
-	target := mediaPath(id, name)
+	target := owner.path(name)
 	// A hard link publishes complete bytes atomically and never overwrites an
 	// existing name, including a file not yet picked up by a scan.
 	if err := l.root.Link(stage, target); err != nil {
@@ -466,7 +502,7 @@ func (l *mediaLibrary) Upload(ctx context.Context, id int64, name string, source
 		}
 		return mediaItem{}, err
 	}
-	m, _, err := l.indexFile(ctx, id, name, true)
+	m, _, err := l.indexOwnedFile(ctx, owner, name, true)
 	if err != nil {
 		_ = l.root.Remove(target)
 		return mediaItem{}, err
@@ -475,15 +511,18 @@ func (l *mediaLibrary) Upload(ctx context.Context, id int64, name string, source
 }
 
 func (l *mediaLibrary) Delete(ctx context.Context, id int64, mediaID string) error {
+	return l.deleteOwned(ctx, mediaOwner{DiveID: id}, mediaID)
+}
+func (l *mediaLibrary) deleteOwned(ctx context.Context, owner mediaOwner, mediaID string) error {
 	if err := l.lock(ctx); err != nil {
 		return err
 	}
 	defer l.unlock()
-	m, err := l.store.mediaByID(ctx, id, mediaID)
+	m, err := l.store.ownedMediaByID(ctx, owner, mediaID)
 	if err != nil {
 		return err
 	}
-	path := mediaPath(id, m.Filename)
+	path := owner.path(m.Filename)
 	trash := ".uploads/deleted-" + newMediaID()
 	renameErr := l.root.Rename(path, trash)
 	if renameErr != nil && !errors.Is(renameErr, fs.ErrNotExist) {
@@ -502,6 +541,7 @@ func (l *mediaLibrary) Delete(ctx context.Context, id int64, mediaID string) err
 }
 
 type mediaPatch struct {
+	Favorite     *bool   `json:"favorite"`
 	Caption      *string `json:"caption"`
 	Description  *string `json:"description"`
 	StereoLayout *string `json:"stereo_layout"`
@@ -509,8 +549,8 @@ type mediaPatch struct {
 }
 
 func (p mediaPatch) validate() error {
-	if p.Caption == nil && p.Description == nil && p.StereoLayout == nil && p.Projection == nil {
-		return errors.New("provide caption, description, stereo_layout, or projection")
+	if p.Caption == nil && p.Description == nil && p.StereoLayout == nil && p.Projection == nil && p.Favorite == nil {
+		return errors.New("provide caption, description, stereo_layout, projection, or favorite")
 	}
 	if p.Caption != nil && len(*p.Caption) > 4096 {
 		return errors.New("caption exceeds 4096 bytes")
@@ -532,6 +572,12 @@ func (p mediaPatch) validate() error {
 }
 
 func (l *mediaLibrary) Patch(ctx context.Context, id int64, mediaID string, patch mediaPatch) (mediaItem, error) {
+	return l.patchOwned(ctx, mediaOwner{DiveID: id}, mediaID, patch)
+}
+func (l *mediaLibrary) patchOwned(ctx context.Context, owner mediaOwner, mediaID string, patch mediaPatch) (mediaItem, error) {
+	if owner.TripID != "" && patch.Favorite != nil {
+		return mediaItem{}, errors.New("favorites apply to dive media; trip media has its own collection")
+	}
 	if err := patch.validate(); err != nil {
 		return mediaItem{}, err
 	}
@@ -539,11 +585,14 @@ func (l *mediaLibrary) Patch(ctx context.Context, id int64, mediaID string, patc
 		return mediaItem{}, err
 	}
 	defer l.unlock()
-	m, err := l.store.mediaByID(ctx, id, mediaID)
+	m, err := l.store.ownedMediaByID(ctx, owner, mediaID)
 	if err != nil {
 		return m, err
 	}
 	old := m
+	if patch.Favorite != nil {
+		m.Favorite = *patch.Favorite
+	}
 	if patch.Caption != nil {
 		m.Caption = *patch.Caption
 	}
@@ -557,7 +606,7 @@ func (l *mediaLibrary) Patch(ctx context.Context, id int64, mediaID string, patc
 		m.StereoLayout = *patch.StereoLayout
 	}
 	if m.Projection != old.Projection || m.StereoLayout != old.StereoLayout {
-		file, err := l.root.Open(mediaPath(id, m.Filename))
+		file, err := l.root.Open(owner.path(m.Filename))
 		if err != nil {
 			return m, err
 		}
