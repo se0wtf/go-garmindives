@@ -267,7 +267,7 @@ func TestDecodeSamplesMapsEveryKnownMetric(t *testing.T) {
 func TestSQLDestinationLoadsIDsAndSavesOnlyNewRecords(t *testing.T) {
 	store, _ := openTestSQLStore(t)
 	destination := &sqlDestination{store: store}
-	archive := newArchive()
+	archive := newSyncState()
 	archive.Dives = append(archive.Dives, testSQLDive(t, 42))
 	if err := destination.Save(context.Background(), archive, 1); err != nil {
 		t.Fatal(err)
@@ -335,7 +335,7 @@ func TestOpenDestinationValidation(t *testing.T) {
 	if _, err := openDestination(context.Background(), outputConfig{Type: "unknown"}); err == nil {
 		t.Fatal("expected unsupported output error")
 	}
-	if _, err := openDestination(context.Background(), outputConfig{Type: outputYAML}); err == nil {
+	if _, err := openDestination(context.Background(), outputConfig{Type: "yaml"}); err == nil {
 		t.Fatal("expected missing YAML path error")
 	}
 	if _, err := openSQLStore(context.Background(), outputPostgres, ""); err == nil {

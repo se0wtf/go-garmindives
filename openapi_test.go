@@ -63,7 +63,7 @@ func TestOpenAPIDocumentsEveryAPIRoute(t *testing.T) {
 	routes := map[string]bool{}
 	// Read actual route registration, so new endpoints cannot silently be left
 	// out of the frontend contract. Documentation/static UI routes are excluded.
-	for _, filename := range []string{"api.go", "media_api.go", "translation_api.go", "travel_api.go"} {
+	for _, filename := range []string{"api.go", "media_api.go", "translation_api.go", "travel_api.go", "application.go", "auth_api.go"} {
 		file, err := parser.ParseFile(token.NewFileSet(), filename, nil, 0)
 		if err != nil {
 			t.Fatal(err)
@@ -86,7 +86,7 @@ func TestOpenAPIDocumentsEveryAPIRoute(t *testing.T) {
 				t.Fatal(err)
 			}
 			method, path, ok := strings.Cut(pattern, " ")
-			if !ok || (!strings.HasPrefix(path, "/api/v1/") && !strings.HasPrefix(path, "/assets/")) {
+			if !ok || (!strings.HasPrefix(path, "/api/v1/") && !strings.HasPrefix(path, "/assets/") && path != "/healthz" && path != "/readyz") {
 				return true
 			}
 			routes[pattern] = true
@@ -170,6 +170,7 @@ func TestOpenAPISchemasMatchResponseFields(t *testing.T) {
 		"DiveCoverPhoto": diveCoverPhoto{},
 		"Translations":   translations{}, "EnglishTranslation": englishTranslation{}, "TranslationStatus": translationStatus{},
 		"Country": country{}, "HomeCountry": homeCountry{}, "DiveTrip": diveTrip{}, "TripList": tripListResponse{}, "TripDetail": tripDetail{}, "CountryLookupStatus": countryLookupStatus{},
+		"SetupStatus": setupStatusResponse{}, "AuthSession": authSessionResponse{}, "Configuration": configurationResponse{}, "DatabaseDisplay": databaseDisplay{}, "HTTPSettings": httpConfig{}, "AuthSettings": authConfig{}, "MediaSettings": mediaConfig{},
 	} {
 		t.Run(name, func(t *testing.T) {
 			schema := openAPIObject(t, schemas[name])
@@ -254,7 +255,7 @@ func TestSwaggerUIAndOpenAPIDownloadsAreEmbedded(t *testing.T) {
 	if !reflect.DeepEqual(jsonDoc, yamlDoc) || jsonDoc["openapi"] != "3.0.3" {
 		t.Fatal("JSON and YAML must expose the same OpenAPI contract")
 	}
-	if jsonResponse.Code != 200 || yamlResponse.Code != 200 || !strings.HasPrefix(jsonResponse.Header().Get("Content-Type"), "application/json") || jsonResponse.Header().Get("Access-Control-Allow-Origin") != "*" {
+	if jsonResponse.Code != 200 || yamlResponse.Code != 200 || !strings.HasPrefix(jsonResponse.Header().Get("Content-Type"), "application/json") || jsonResponse.Header().Get("Access-Control-Allow-Origin") != "" {
 		t.Fatalf("spec response: %d / %d, %v", jsonResponse.Code, yamlResponse.Code, jsonResponse.Header())
 	}
 	for path, expectedType := range map[string]string{

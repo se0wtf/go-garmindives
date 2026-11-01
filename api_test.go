@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -63,7 +64,7 @@ func getJSON[T any](t *testing.T, url string, wantStatus int) (T, http.Header) {
 func TestAPIHealthAndCORS(t *testing.T) {
 	_, server := apiTestServer(t)
 	health, headers := getJSON[map[string]string](t, server.URL+"/api/v1/health", http.StatusOK)
-	if health["status"] != "ok" || headers.Get("Access-Control-Allow-Origin") != "*" || headers.Get("Cache-Control") != "no-store" {
+	if health["status"] != "ok" || headers.Get("Access-Control-Allow-Origin") != "" || headers.Get("Cache-Control") != "no-store" {
 		t.Fatalf("health = %#v, headers = %#v", health, headers)
 	}
 	request, err := http.NewRequest(http.MethodOptions, server.URL+"/api/v1/dives", nil)
@@ -75,7 +76,7 @@ func TestAPIHealthAndCORS(t *testing.T) {
 		t.Fatal(err)
 	}
 	response.Body.Close()
-	if response.StatusCode != http.StatusNoContent || response.Header.Get("Access-Control-Allow-Origin") != "*" {
+	if response.StatusCode != http.StatusNoContent || response.Header.Get("Access-Control-Allow-Origin") != "" {
 		t.Fatalf("OPTIONS status = %d, headers = %#v", response.StatusCode, response.Header)
 	}
 }
@@ -208,7 +209,7 @@ func TestServeAPIStopsWithContext(t *testing.T) {
 	store, _ := openTestSQLStore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := serveAPI(ctx, "127.0.0.1:0", store, testLogger(t))
+	err := serveAPI(ctx, "127.0.0.1:0", newAPIHandler(store, testLogger(t)), testLogger(t))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("serveAPI() error = %v", err)
 	}
@@ -222,7 +223,7 @@ func TestAPIListenAddressSafety(t *testing.T) {
 		t.Fatal("public bind was recognized as loopback")
 	}
 	store, _ := openTestSQLStore(t)
-	if err := serveAPI(context.Background(), "", store, testLogger(t)); err == nil {
+	if err := serveAPI(context.Background(), "", newAPIHandler(store, testLogger(t)), testLogger(t)); err == nil {
 		t.Fatal("expected empty listen address error")
 	}
 }
@@ -250,14 +251,15 @@ func TestRunServeConfigurationAndHelp(t *testing.T) {
 		gotKind, gotDSN = kind, dsn
 		return store, nil
 	}
-	if err := runServeWithDependencies(context.Background(), []string{"-output-type", "sqlite", "-output-dsn", "custom.db", "-listen", "127.0.0.1:9090"}, io.Discard, testLogger(t), openStore,
-		func(_ context.Context, address string, _ *sqlStore, _ *charmLog.Logger) error {
+	if err := runServeWithDependencies(context.Background(), configuredServeArgs(t, store, []string{"-output-type", "sqlite", "-output-dsn", "custom.db", "-listen", "127.0.0.1:9090"}), io.Discard, testLogger(t), openStore,
+		func(_ context.Context, address string, app *application, _ *charmLog.Logger) error {
+			waitApplicationReady(t, app)
 			gotAddress = address
 			return nil
 		}); err != nil {
 		t.Fatal(err)
 	}
-	if gotKind != outputSQLite || gotDSN != "custom.db" || gotAddress != "127.0.0.1:9090" {
+	if gotKind != outputSQLite || filepath.Base(gotDSN) != "custom.db" || gotAddress != "127.0.0.1:9090" {
 		t.Fatalf("serve configuration = %q, %q, %q", gotKind, gotDSN, gotAddress)
 	}
 }
@@ -271,19 +273,20 @@ func TestRunServeUsesEnvironment(t *testing.T) {
 	t.Setenv("GARMIN_API_ADDR", "localhost:9191")
 	store, _ := openTestSQLStore(t)
 	var gotKind, gotDSN, gotAddress string
-	err := runServeWithDependencies(context.Background(), nil, io.Discard, testLogger(t),
+	err := runServeWithDependencies(context.Background(), configuredServeArgs(t, store, nil), io.Discard, testLogger(t),
 		func(_ context.Context, kind, dsn string) (*sqlStore, error) {
 			gotKind, gotDSN = kind, dsn
 			return store, nil
 		},
-		func(_ context.Context, address string, _ *sqlStore, _ *charmLog.Logger) error {
+		func(_ context.Context, address string, app *application, _ *charmLog.Logger) error {
+			waitApplicationReady(t, app)
 			gotAddress = address
 			return nil
 		})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotKind != outputSQLite || gotDSN != "environment.db" || gotAddress != "localhost:9191" {
+	if gotKind != outputSQLite || filepath.Base(gotDSN) != "environment.db" || gotAddress != "localhost:9191" {
 		t.Fatalf("environment serve configuration = %q, %q, %q", gotKind, gotDSN, gotAddress)
 	}
 }

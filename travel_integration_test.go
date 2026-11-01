@@ -153,7 +153,8 @@ func TestRunServeBackfillsCountriesAndTripsWithMockProvider(t *testing.T) {
 	t.Setenv("GARMIN_GEOCODING_URL", provider.URL)
 	t.Setenv("GARMIN_GEOCODING_INTERVAL", "1ms")
 	t.Setenv("GARMIN_GEOCODING_USER_AGENT", "go-garmindives/test")
-	err := runServeWithDependencies(context.Background(), []string{"-output-type", "sqlite", "-assets-dir", t.TempDir()}, io.Discard, testLogger(t), func(context.Context, string, string) (*sqlStore, error) { return s, nil }, func(ctx context.Context, _ string, store *sqlStore, _ *charmLog.Logger) error {
+	err := runServeWithDependencies(context.Background(), configuredServeArgs(t, s, []string{"-output-type", "sqlite", "-assets-dir", t.TempDir()}), io.Discard, testLogger(t), func(context.Context, string, string) (*sqlStore, error) { return s, nil }, func(ctx context.Context, _ string, app *application, _ *charmLog.Logger) error {
+		store := waitApplicationReady(t, app).store
 		h := newAPIHandler(store, testLogger(t))
 		deadline := time.Now().Add(3 * time.Second)
 		for time.Now().Before(deadline) {

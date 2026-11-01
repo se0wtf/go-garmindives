@@ -71,6 +71,9 @@ func rateTestResponse(status int, header string) *http.Response {
 }
 
 func TestGarminRateConfiguration(t *testing.T) {
+	clearApplicationEnvironment(t)
+	store, _ := openTestSQLStore(t)
+	configuredArgs := configuredServeArgs(t, store, nil)
 	for _, test := range []struct {
 		value string
 		want  time.Duration
@@ -93,7 +96,7 @@ func TestGarminRateConfiguration(t *testing.T) {
 		if _, err := newGarminHTTPClientFromEnvironment(testLogger(t)); err == nil {
 			t.Fatalf("accepted invalid request interval %q", invalid)
 		}
-		if err := run(context.Background(), []string{"sync"}, nil, io.Discard, testLogger(t)); err == nil || !strings.Contains(err.Error(), "GARMIN_REQUEST_INTERVAL") {
+		if err := run(context.Background(), append([]string{"sync"}, configuredArgs...), nil, io.Discard, testLogger(t)); err == nil || !strings.Contains(err.Error(), "GARMIN_REQUEST_INTERVAL") {
 			t.Fatalf("sync did not validate the request interval before starting: %v", err)
 		}
 	}

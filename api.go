@@ -72,9 +72,6 @@ func newAPIHandler(store *sqlStore, logger *charmLog.Logger) http.Handler {
 
 func apiMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Range, If-None-Match, If-Modified-Since, If-Range")
 		w.Header().Set("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges, ETag, Last-Modified, Content-Disposition, Location")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Cache-Control", "no-store")
@@ -295,7 +292,7 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	_ = json.NewEncoder(w).Encode(value)
 }
 
-func serveAPI(ctx context.Context, address string, store *sqlStore, logger *charmLog.Logger) error {
+func serveAPI(ctx context.Context, address string, handler http.Handler, logger *charmLog.Logger) error {
 	if strings.TrimSpace(address) == "" {
 		return errors.New("REST API listen address must not be empty")
 	}
@@ -304,7 +301,7 @@ func serveAPI(ctx context.Context, address string, store *sqlStore, logger *char
 		return fmt.Errorf("listen for REST API: %w", err)
 	}
 	server := &http.Server{
-		Handler:           newAPIHandler(store, logger),
+		Handler:           handler,
 		BaseContext:       func(net.Listener) context.Context { return ctx },
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
@@ -317,9 +314,6 @@ func serveAPI(ctx context.Context, address string, store *sqlStore, logger *char
 	}()
 	if logger != nil {
 		logger.Info("REST API listening", "address", listener.Addr().String(), "swagger", "/swagger/")
-		if !isLoopbackAddress(address) {
-			logger.Warn("REST API has no authentication; only expose it to trusted networks", "address", address)
-		}
 	}
 	select {
 	case err := <-result:

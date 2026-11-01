@@ -58,7 +58,7 @@ func TestSyncDivesAddsOnlyMissingDives(t *testing.T) {
 		activityDetailsErr: map[int64]error{},
 		diveDetailsErr:     map[int64]error{},
 	}
-	archive := newArchive()
+	archive := newSyncState()
 	archive.Dives = append(archive.Dives, DiveRecord{ID: 1})
 	var progress [][2]int
 	added, err := syncDives(context.Background(), client, &archive, func(completed, total int) {
@@ -102,7 +102,7 @@ func TestSyncDivesIsTransactional(t *testing.T) {
 		activityDetailsErr: map[int64]error{},
 		diveDetailsErr:     map[int64]error{11: wantErr},
 	}
-	archive := newArchive()
+	archive := newSyncState()
 	added, err := syncDives(context.Background(), client, &archive, nil)
 	if added != 0 || !errors.Is(err, wantErr) || len(archive.Dives) != 0 {
 		t.Fatalf("added=%d archive=%#v err=%v", added, archive, err)
@@ -112,7 +112,7 @@ func TestSyncDivesIsTransactional(t *testing.T) {
 func TestSyncDivesErrors(t *testing.T) {
 	wantErr := errors.New("list failed")
 	client := &fakeDiveClient{activitiesErr: wantErr}
-	archive := newArchive()
+	archive := newSyncState()
 	if _, err := syncDives(context.Background(), client, &archive, nil); !errors.Is(err, wantErr) {
 		t.Fatalf("error = %v", err)
 	}

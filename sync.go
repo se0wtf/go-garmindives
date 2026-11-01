@@ -44,7 +44,7 @@ type activityGetter interface {
 
 // syncDive refreshes one explicitly selected activity without listing history.
 // Cached FIT data is retained; only an absent FIT download is backfilled.
-func syncDive(ctx context.Context, client diveClient, archive *Archive, id int64, reportProgress func(int, int)) (int, error) {
+func syncDive(ctx context.Context, client diveClient, archive *syncState, id int64, reportProgress func(int, int)) (int, error) {
 	if id <= 0 {
 		return 0, errors.New("activity ID must be positive")
 	}
@@ -139,7 +139,7 @@ func syncDive(ctx context.Context, client diveClient, archive *Archive, id int64
 	return 1, nil
 }
 
-func syncDives(ctx context.Context, client diveClient, archive *Archive, reportProgress func(int, int)) (int, error) {
+func syncDives(ctx context.Context, client diveClient, archive *syncState, reportProgress func(int, int)) (int, error) {
 	activities, err := client.Activities(ctx, garmin.ListOptions{
 		Limit: divePageSize,
 	})

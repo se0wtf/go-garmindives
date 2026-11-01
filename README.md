@@ -1,7 +1,7 @@
 # go-garmindives
 
-`go-garmindives` exports every Garmin Connect diving activity to YAML, SQLite,
-or PostgreSQL. It supports Garmin's official Personal API through an API key,
+`go-garmindives` stores every Garmin Connect diving activity in SQLite or
+PostgreSQL. It supports Garmin's official Personal API through an API key,
 and the legacy Connect/Dive APIs through an account login. Each dive preserves
 the available JSON documents, original FIT files, and all decoded FIT messages,
 including depth-over-time samples. The local API also manages photos and videos
@@ -11,14 +11,173 @@ The app is unofficial and is not affiliated with Garmin.
 
 ## Install
 
+Requires Go 1.26 or newer.
+
 ```sh
 go install github.com/se0wtf/go-garmindives@latest
 ```
 
+## Configuration and administrator setup
+
+The application uses **SQL storage only**: SQLite or PostgreSQL. The old YAML/file
+archive output and `-output` flag have been removed. Raw Garmin JSON and original
+FIT BLOBs remain inside SQL. YAML is used only for application settings.
+
+Start the API, even before a database has been configured:
+
+```sh
+# Local HTTP development; keep secure cookies enabled behind production HTTPS.
+GARMIN_COOKIE_SECURE=false go-garmindives serve -config ./config.yaml
+```
+
+`-config` or `GARMIN_CONFIG` selects the file (default `config.yaml`). See
+[`config.example.yaml`](config.example.yaml). Relative SQLite paths and media
+directories resolve against the configuration directory. Explicit command flags
+win over **ENV → YAML → defaults**. The YAML file is saved atomically with mode
+`0600`. `GARMIN_DB_TYPE` and `GARMIN_DB_URI` override `database.type` and
+`database.uri`; the older `GARMIN_OUTPUT_TYPE` / `GARMIN_OUTPUT_DSN` aliases also
+work, with the newer names taking precedence. ENV secrets are not copied into
+the YAML file automatically.
+
+A minimal configuration before setup is:
+
+```yaml
+version: 1
+initialized: false
+database:
+  type: sqlite
+  uri: dives.db
+```
+
+The frontend setup flow is:
+
+1. `GET /api/v1/setup/status` returns `configured`, `ready`, `state`, setting
+   override sources, and password-length constraints. Before initialization,
+   normal APIs and asset routes return `503` / `not_configured`.
+2. `GET /api/v1/setup/countries` supplies the bilingual country choices without
+   requiring a database.
+3. `POST /api/v1/setup` accepts:
+   ```json
+   {
+     "database": {"type": "sqlite", "uri": "dives.db"},
+     "admin_password": "your long unique passphrase",
+     "home_countries": [
+       {"country_code": "FR", "from": "2020-01-01", "to": null}
+     ]
+   }
+   ```
+4. Setup checks/migrates SQL, preserves existing dives/FIT/media, creates the
+   administrator, and records residence history. At least one residence period
+   must exist. Identical existing periods are reused; overlaps are rejected.
+5. A successful response is `201` with `configured: true`, `ready: false`,
+   `state: "starting"`. Poll status until ready; then log in. Startup media
+   indexing and the configured workers start in the same Go process.
+
+Setup deliberately has **no extra setup token**. After completion, the setup
+endpoint returns `409 already_configured`. A database outage or a missing admin
+row never reopens it. Do not reset `initialized` or `instance_id` to move databases;
+copy/migrate the initialized SQL data and preserve the configuration identity.
+If the YAML file was lost, supplying the existing SQL administrator password
+through setup can adopt that database without resetting credentials or history.
+A failed configuration-file save rolls SQL initialization back.
+
+### Login and edit permissions
+
+Anonymous users can read configured dives, trips, and media. Every mutation
+(POST/PUT/PATCH/DELETE, including uploads, scans, retries, and regrouping) requires
+an administrator session. Application settings are private even for GET requests.
+No external authentication service or JWT infrastructure is needed.
+
+- `POST /api/v1/auth/login`: JSON `{"password":"..."}`; sets the session cookie.
+- `GET /api/v1/auth/session`: `{ "authenticated": true, "expires_at": "..." }`,
+  or `{ "authenticated": false }` for an anonymous/expired session.
+- `POST /api/v1/auth/logout`: deletes the current SQL session and clears its cookie.
+- `POST /api/v1/auth/password`: JSON `current_password` and `new_password`;
+  revokes **all** sessions, including requests holding an older credential version.
+- Unauthenticated writes return `401 authentication_required`; login failures
+  return `401 invalid_credentials`. Rate-limited attempts return `429` with
+  `Retry-After`.
+
+Passwords require **15–128 Unicode characters**, support passphrases and significant
+whitespace, and reject common/repeated patterns. Passwords are salted and hashed
+with Argon2id (64 MiB, three iterations); only hashes live in SQL. Login/setup
+hashing concurrency and password attempts are bounded. Recovery requires local
+access to the backend:
+
+```sh
+go-garmindives admin reset-password -config /config/config.yaml
+```
+
+The command prompts securely and revokes all sessions. It never accepts a password
+as a command argument or stores it in YAML.
+
+Sessions use SCS with the existing SQL database. Only token digests are stored.
+The cookie is `HttpOnly`, host-only, `SameSite=Strict`, `Path=/`, and `Secure` by
+default (`__Host-garmindives_session`). For explicit local HTTP development,
+`GARMIN_COOKIE_SECURE=false` uses `garmindives_session`. Same-origin browser
+requests send cookies automatically; JavaScript should not store session tokens.
+Go's cross-origin protection rejects cross-site writes, including login and setup.
+Wildcard CORS is disabled. Password-attempt rate limits use the connection's peer
+address, never untrusted forwarded-IP headers.
+
+YAML settings include:
+
+```yaml
+http:
+  listen: 0.0.0.0:8080
+  cookie_secure: true
+  # public_url: https://dives.example.com
+auth:
+  session_lifetime: 24h
+  idle_timeout: 2h
+media:
+  directory: assets
+  max_upload_bytes: 17179869184
+```
+
+ENV overrides: `GARMIN_API_ADDR`, `GARMIN_COOKIE_SECURE`, `GARMIN_PUBLIC_URL`,
+`GARMIN_SESSION_LIFETIME`, `GARMIN_SESSION_IDLE_TIMEOUT`, `GARMIN_ASSETS_DIR`,
+`GARMIN_MEDIA_MAX_UPLOAD_BYTES`. Durations use Go syntax (`24h`, not `1d`). Sessions
+expire on idle timeout even before their absolute lifetime. Credential changes
+and logout take effect immediately; sessions otherwise survive backend restarts.
+
+`GET /api/v1/config` reports current/pending settings, override sources, and a
+redacted database destination. `PATCH /api/v1/config` accepts a `database` object
+with `type`/`uri` to save changes for the next restart. It does not move data or
+switch live connections. Restart both backend roles after explicitly migrating
+SQL. Setting values managed by ENV/flags cannot be overridden through the API.
+
+### Serve and sync containers
+
+For a frontend, serve backend, sync backend, and SQL database on one server:
+
+- Share the **configuration directory** between the two backend containers;
+  serve needs write access and sync can mount it read-only. Mount the directory,
+  not just the file, because configuration saves use atomic replacement.
+- Use the same `GARMIN_CONFIG` path and SQL ENV overrides in both backends.
+  The sync command reads configuration on each invocation and checks the SQL
+  initialization identity before contacting Garmin. It needs no browser login.
+- Start the frontend before setup is complete. Proxy `/api`, `/assets`, and docs
+  to the serve backend under the same HTTPS origin, preserving `Host` and browser
+  origin/fetch headers. `GARMIN_PUBLIC_URL` can specify the external origin when
+  the proxy changes `Host`. Keep the backend on the private container network.
+- `/healthz` is process liveness and is available before setup; `/readyz` returns
+  `503` until normal APIs are ready and whenever the SQL connection fails its
+  health check. Gate the sync container/scheduled sync on
+  readiness. Do **not** gate frontend startup on readiness, because it serves setup.
+- The sync role gets Garmin credentials/API key through ENV as before. The serve
+  role does not need Garmin credentials. SQLite deployments must also share the
+  database volume at matching paths; PostgreSQL deployments use the shared URI.
+
+With curl, save the cookie returned by login (`-c admin-cookies.txt`) and include
+`-b admin-cookies.txt` on authenticated requests. The mutation examples below
+assume this cookie file already exists. Swagger's **Try it out** can call login
+first and then uses the browser cookie automatically.
+
 ## Usage
 
 Create a key in [Garmin Connect's Personal API settings](https://connect.garmin.com/app/settings/personalApiToken)
-and supply it through the environment:
+and supply it to the sync command after initial setup:
 
 ```sh
 export GARMIN_PERSONAL_API_KEY='your-personal-api-key'
@@ -50,7 +209,7 @@ Depth-over-time profiles require only the API key. FIT downloads also work with
 legacy sessions. ZIP archives, multiple FIT files, and chained FIT sequences
 are decoded with CRC validation.
 
-The `fit` document in YAML and REST dive details contains every decoded message:
+The `fit` document in SQL and REST dive details contains every decoded message:
 records, sessions, laps, dive summaries, gases, settings, tank updates, device
 information, events, and any other messages present in the file. Fields retain
 their numbers, types, units, raw values, and values after applying FIT scales and
@@ -84,7 +243,7 @@ reuse the cached session and automatically refresh expiring API tokens. If Garmi
 either part of the session, the app asks for credentials and MFA again.
 
 SQLite is the default output. Running `go-garmindives` creates or updates
-`dives.db` in the current directory, with owner-only permissions. Set another
+`dives.db` relative to the configuration directory, with owner-only permissions. Set another
 database path with:
 
 ```sh
@@ -97,25 +256,18 @@ The database path can also be configured through the environment:
 GARMIN_OUTPUT_DSN=/path/to/dives.db go-garmindives
 ```
 
-Select YAML explicitly to create or update `dives.yaml`, or choose another
-archive and token cache path:
-
-```sh
-go-garmindives -output-type yaml
-go-garmindives -output-type yaml -output /path/to/dives.yaml -token-file /path/to/tokens.json
-```
-
-`GARMIN_OUTPUT_TYPE=yaml` also selects YAML. The `-output` flag applies only to
-YAML; SQLite and PostgreSQL use `-output-dsn` or `GARMIN_OUTPUT_DSN`.
+`-output-type` and `-output-dsn` remain SQL-only command overrides. The selected
+database must match the initialized configuration identity.
 
 For PostgreSQL, provide a standard connection URL:
 
 ```sh
-GARMIN_OUTPUT_TYPE=postgres \
-GARMIN_OUTPUT_DSN='postgres://user:password@localhost:5432/garmindives?sslmode=require' \
-go-garmindives
+GARMIN_DB_TYPE=postgres \
+GARMIN_DB_URI='postgres://user:password@localhost:5432/garmindives?sslmode=require' \
+go-garmindives serve
 ```
 
+Use the same ENV values for the separate sync role after setup.
 The DSN is never written to application logs. The same settings are available
 as `-output-type` and `-output-dsn` flags; flags override environment values.
 
@@ -139,10 +291,9 @@ missing; a dive not yet stored is imported on its own. The usual authentication,
 request pacing, and output flags also apply, for example `-output-dsn /path/to/dives.db`.
 The translation worker discovers changed French text while `serve` is running.
 
-Downloads are sequential. YAML is replaced atomically only after every download
-and decode succeeds; SQL batches, including FIT backfills, commit in one
+Downloads are sequential. SQL batches, including FIT backfills, commit in one
 transaction. Corrupt or unavailable original files fail the sync without saving
-partial changes. YAML, SQLite, and the token file use mode `0600` where applicable.
+partial changes. Configuration, SQLite, and token files use mode `0600` where applicable.
 
 ## Countries, years, residence history, and trips
 
@@ -210,10 +361,10 @@ means the period has no end date. Periods cannot overlap (including shared end
 dates). For example:
 
 ```sh
-curl -X POST http://127.0.0.1:8080/api/v1/home-countries \
+curl -b admin-cookies.txt -X POST http://127.0.0.1:8080/api/v1/home-countries \
   -H 'Content-Type: application/json' \
   -d '{"country_code":"FR","from":"2020-01-01","to":"2025-06-30"}'
-curl -X POST http://127.0.0.1:8080/api/v1/home-countries \
+curl -b admin-cookies.txt -X POST http://127.0.0.1:8080/api/v1/home-countries \
   -H 'Content-Type: application/json' \
   -d '{"country_code":"NC","from":"2025-07-01","to":null}'
 ```
@@ -280,7 +431,7 @@ hints, JPEG thumbnails, range requests, and duplicate-name protection behave lik
 dive media:
 
 ```sh
-curl -F 'file=@Le bateau.jpeg' http://127.0.0.1:8080/api/v1/trips/TRIP_ID/media
+curl -b admin-cookies.txt -F 'file=@Le bateau.jpeg' http://127.0.0.1:8080/api/v1/trips/TRIP_ID/media
 ```
 
 GET/POST `/api/v1/trips/{tripID}/media`, GET/PATCH/DELETE
@@ -294,7 +445,7 @@ but removes the trip and its media from the active APIs.
 Mark a dive photo **or video** with:
 
 ```sh
-curl -X PATCH http://127.0.0.1:8080/api/v1/dives/DIVE_ID/media/MEDIA_ID \
+curl -b admin-cookies.txt -X PATCH http://127.0.0.1:8080/api/v1/dives/DIVE_ID/media/MEDIA_ID \
   -H 'Content-Type: application/json' -d '{"favorite":true}'
 ```
 
@@ -365,7 +516,7 @@ migration; existing migrations are never rewritten.
 Future features can load exact original bytes through `sqlStore.FITFiles`, or
 re-decode all cached files with `sqlStore.DecodeStoredFIT`, without a Garmin
 session or a network request. Reads verify byte counts and checksums. The
-existing JSON/REST and YAML representations retain `original_base64` for
+SQL/REST FIT documents retain `original_base64` for
 compatibility. A stored binary file also marks its dive as cached for sync,
 even if the decoded JSON is subsequently cleared for reprocessing.
 
@@ -380,9 +531,9 @@ go-garmindives serve -output-type sqlite -output-dsn /path/to/dives.db
 ```
 
 It listens on `127.0.0.1:8080` by default. Change this with `-listen` or
-`GARMIN_API_ADDR`. There is intentionally no authentication yet, so only bind it
-to a trusted network. Browser access from a separately hosted JavaScript
-frontend is enabled through CORS.
+`GARMIN_API_ADDR`. Reads are public after initial configuration; writes and
+application settings require an administrator session. The browser frontend and
+API share one origin through the frontend proxy.
 
 Browse the interactive **Swagger UI** at
 [`http://127.0.0.1:8080/swagger/`](http://127.0.0.1:8080/swagger/) (also available
@@ -546,7 +697,7 @@ can still consume quota on retry.
 Select a cover photo using the ID returned by the media API:
 
 ```sh
-curl -X PATCH -H 'Content-Type: application/json' \
+curl -b admin-cookies.txt -X PATCH -H 'Content-Type: application/json' \
   -d '{"cover_media_id":"MEDIA_ID"}' \
   http://127.0.0.1:8080/api/v1/dives/123456789
 ```
@@ -622,7 +773,7 @@ filename, then rename into place once finished to avoid scanning incomplete file
 Use `?force=true` to hash/reprocess every file, including changes made by tools
 that preserve both size and modification time.
 
-The media APIs have no authentication, as with the existing dive API:
+Media reads are public; uploads, metadata edits, deletions, and rescans require an administrator session:
 
 | Method and path | Purpose |
 | --- | --- |
@@ -639,12 +790,12 @@ The media APIs have no authentication, as with the existing dive API:
 For example:
 
 ```sh
-curl -F 'file=@/path/to/Turtle original.jpeg' \
+curl -b admin-cookies.txt -F 'file=@/path/to/Turtle original.jpeg' \
   http://127.0.0.1:8080/api/v1/dives/123456789/media
 
-curl -X POST http://127.0.0.1:8080/api/v1/media/scan
+curl -b admin-cookies.txt -X POST http://127.0.0.1:8080/api/v1/media/scan
 
-curl -X PATCH -H 'Content-Type: application/json' \
+curl -b admin-cookies.txt -X PATCH -H 'Content-Type: application/json' \
   -d '{"caption":"Reef wall panorama","description":"A sea turtle swimming above the reef near the end of the dive.","projection":"360"}' \
   http://127.0.0.1:8080/api/v1/dives/123456789/media/MEDIA_ID
 ```
@@ -716,18 +867,19 @@ go vet ./...
 
 Tests are offline by default, including Personal API authentication, incremental
 sync, FIT decoding, developer/unknown fields, invalid values, compressed
-timestamps, CRC errors, transactional backfills, YAML/SQLite output, REST
+timestamps, CRC errors, transactional backfills, SQL-only storage and setup/authentication, REST
 responses, and missing versus zero measurements.
 Documentation tests check that API routes and response fields match the OpenAPI
 contract, that its references resolve, and that the bundled UI/spec routes work.
-CI also validates the specification with `openapi-spec-validator`.
+CI also validates the specification with `openapi-spec-validator` and runs the
+PostgreSQL integration tests, including initial setup, binary session storage,
+and password revocation, against a disposable database.
 Original FIT storage tests cover binary round trips, offline re-decoding,
 migration from existing JSON, rollback, checksums, and cascading deletion.
 Request-pacing tests use a fake clock and cover concurrent callers, HTTP 429,
 `Retry-After`, retry limits, token renewal, and cancellation without contacting
 Garmin or waiting through real cooldowns.
-To validate the official API against one real dive with temporary YAML and
-SQLite output, set `GARMIN_PERSONAL_API_KEY` and run:
+To validate the official API against one real dive with temporary SQLite storage, set `GARMIN_PERSONAL_API_KEY` and run:
 
 ```sh
 go test -run '^TestGarminPersonalDiveIntegration$' -count=1 -v
@@ -749,13 +901,6 @@ validated against a disposable database:
 
 ```sh
 TEST_POSTGRES_DSN='postgres://...' go test -run TestPostgresStoreIntegration -v
-```
-
-A complete existing YAML archive can be run through the SQL mapper as an
-additional regression test:
-
-```sh
-TEST_DIVE_ARCHIVE=/path/to/dives.yaml go test -run TestDiveArchiveSQLIntegration -v
 ```
 
 ## Credits

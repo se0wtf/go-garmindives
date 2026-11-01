@@ -54,7 +54,7 @@ func TestSyncDiveRefreshesOnlySelectedActivity(t *testing.T) {
 				client.diveDetails[id] = json.RawMessage(`{"connectId":24424941853,"name":"Updated dive","notes":"N:4/5\nCommentaire: Beau récif\nHL: Raies aigles"}`)
 				client.activity = json.RawMessage(`{"activityId":24424941853,"activityName":"Updated dive","activityTypeDTO":{"typeKey":"single_gas_diving"}}`)
 			}
-			archive := newArchive()
+			archive := newSyncState()
 			other := DiveRecord{ID: 10, Activity: map[string]any{"description": "Untouched"}}
 			old := DiveRecord{ID: id, fitComplete: true, ActivityDetails: map[string]any{"profile": "cached"}}
 			archive.Dives = []DiveRecord{old, other}
@@ -105,7 +105,7 @@ func TestSyncDiveErrorsLeaveArchiveUnchanged(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			client := newRefreshTestClient(t, 42, exampleDiveNote)
 			tc.edit(client)
-			archive := newArchive()
+			archive := newSyncState()
 			archive.Dives = []DiveRecord{{ID: 42}, {ID: 43}}
 			before := append([]DiveRecord{}, archive.Dives...)
 			changed, err := syncDive(context.Background(), client, &archive, 42, nil)
@@ -120,7 +120,7 @@ func TestSyncDiveImportsMissingActivityAndBackfillsFIT(t *testing.T) {
 	for _, exists := range []bool{false, true} {
 		t.Run(map[bool]string{false: "new dive", true: "missing FIT"}[exists], func(t *testing.T) {
 			client := newRefreshTestClient(t, 42, exampleDiveNote)
-			archive := newArchive()
+			archive := newSyncState()
 			if exists {
 				archive.Dives = []DiveRecord{{ID: 42}}
 			}

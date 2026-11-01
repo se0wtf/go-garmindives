@@ -516,9 +516,10 @@ func TestRunServeStartsTranslationBackfillAndResumesFailedWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = runServeWithDependencies(context.Background(), []string{"-output-type", "sqlite", "-assets-dir", t.TempDir()}, io.Discard, logger,
+	err = runServeWithDependencies(context.Background(), configuredServeArgs(t, store, []string{"-output-type", "sqlite", "-assets-dir", t.TempDir()}), io.Discard, logger,
 		func(context.Context, string, string) (*sqlStore, error) { return store, nil },
-		func(ctx context.Context, _ string, running *sqlStore, _ *charmLog.Logger) error {
+		func(ctx context.Context, _ string, app *application, _ *charmLog.Logger) error {
+			running := waitApplicationReady(t, app).store
 			h := newAPIHandler(running, logger)
 			deadline := time.Now().Add(3 * time.Second)
 			for time.Now().Before(deadline) {

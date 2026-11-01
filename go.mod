@@ -1,15 +1,17 @@
 module github.com/se0wtf/go-garmindives
 
-go 1.25.0
+go 1.26.0
 
 require (
+	github.com/alexedwards/scs/v2 v2.9.0
 	github.com/charmbracelet/log v1.0.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/muktihari/fit v0.27.3
 	github.com/se0wtf/go-garminconnect v0.2.0
 	go.yaml.in/yaml/v3 v3.0.4
-	golang.org/x/term v0.35.0
-	golang.org/x/text v0.35.0
+	golang.org/x/crypto v0.58.0
+	golang.org/x/term v0.47.0
+	golang.org/x/text v0.43.0
 	modernc.org/sqlite v1.57.0
 )
 
@@ -37,8 +39,8 @@ require (
 	github.com/rogpeppe/go-internal v1.16.0 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	golang.org/x/exp v0.0.0-20231006140011-7918f672742d // indirect
-	golang.org/x/sync v0.21.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/sync v0.24.0 // indirect
+	golang.org/x/sys v0.49.0 // indirect
 	modernc.org/libc v1.74.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect

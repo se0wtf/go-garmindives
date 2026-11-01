@@ -57,8 +57,24 @@ func run(ctx context.Context, args []string, input *os.File, output io.Writer, l
 	if len(args) != 0 && args[0] == "serve" {
 		return runServe(ctx, args[1:], output, logger)
 	}
+	if len(args) >= 2 && args[0] == "admin" && args[1] == "reset-password" {
+		return resetAdminPassword(ctx, args[2:], input, output, logger)
+	}
 	if len(args) != 0 && args[0] == "sync" {
 		args = args[1:]
+	}
+	config, err := loadApplicationConfig(args)
+	if err != nil {
+		return err
+	}
+	help := false
+	for _, arg := range args {
+		if arg == "-h" || arg == "-help" || arg == "--help" {
+			help = true
+		}
+	}
+	if !help && !config.File.Initialized {
+		return errNotConfigured
 	}
 	httpClient, err := newGarminHTTPClientFromEnvironment(logger)
 	if err != nil {
@@ -67,6 +83,7 @@ func run(ctx context.Context, args []string, input *os.File, output io.Writer, l
 	defer httpClient.CloseIdleConnections()
 	prompt := newTerminalPrompter(input, output)
 	dependencies := appDependencies{
+		config: &config, requireInitialization: true,
 		personalAPIKey:  strings.TrimSpace(os.Getenv("GARMIN_PERSONAL_API_KEY")),
 		configDirectory: os.UserConfigDir,
 		openDestination: openDestination,
@@ -84,12 +101,14 @@ func run(ctx context.Context, args []string, input *os.File, output io.Writer, l
 }
 
 type appDependencies struct {
-	personalAPIKey  string
-	configDirectory func() (string, error)
-	openDestination func(context.Context, outputConfig) (diveDestination, error)
-	loadCached      func(string) (diveClient, error)
-	loginFresh      func(context.Context, string) (diveClient, error)
-	newPersonal     func(string, string) (diveClient, error)
+	config                *loadedConfig
+	requireInitialization bool
+	personalAPIKey        string
+	configDirectory       func() (string, error)
+	openDestination       func(context.Context, outputConfig) (diveDestination, error)
+	loadCached            func(string) (diveClient, error)
+	loginFresh            func(context.Context, string) (diveClient, error)
+	newPersonal           func(string, string) (diveClient, error)
 }
 
 func runWithDependencies(ctx context.Context, args []string, output io.Writer, logger *charmLog.Logger, dependencies appDependencies) error {
@@ -99,9 +118,16 @@ func runWithDependencies(ctx context.Context, args []string, output io.Writer, l
 	}
 	flags := flag.NewFlagSet("go-garmindives", flag.ContinueOnError)
 	flags.SetOutput(output)
-	archivePath := flags.String("output", "dives.yaml", "path to the YAML dive archive (requires -output-type yaml)")
-	outputType := flags.String("output-type", envDefault("GARMIN_OUTPUT_TYPE", outputSQLite), "output type: sqlite, yaml, or postgres")
-	outputDSN := flags.String("output-dsn", strings.TrimSpace(os.Getenv("GARMIN_OUTPUT_DSN")), "SQL database path or PostgreSQL connection URL")
+	kindDefault, dsnDefault := envDefault("GARMIN_OUTPUT_TYPE", outputSQLite), strings.TrimSpace(os.Getenv("GARMIN_OUTPUT_DSN"))
+	configPath := envDefault("GARMIN_CONFIG", "config.yaml")
+	if dependencies.config != nil {
+		kindDefault = dependencies.config.Effective.Database.Type
+		dsnDefault = dependencies.config.databaseOutput().Endpoint
+		configPath = dependencies.config.Path
+	}
+	flags.String("config", configPath, "YAML application configuration file")
+	outputType := flags.String("output-type", kindDefault, "SQL database type: sqlite or postgres")
+	outputDSN := flags.String("output-dsn", dsnDefault, "SQLite database path or PostgreSQL URI")
 	activityID := flags.Int64("activity-id", 0, "refresh only this Garmin dive activity ID, preserving cached FIT and local media")
 	tokenFile := "tokens.json"
 	if dependencies.personalAPIKey != "" {
@@ -109,7 +135,7 @@ func runWithDependencies(ctx context.Context, args []string, output io.Writer, l
 	}
 	tokenPath := flags.String("token-file", filepath.Join(configDirectory, "go-garmindives", tokenFile), "path to the Garmin token cache")
 	flags.Usage = func() {
-		_, _ = fmt.Fprintln(output, `go-garmindives downloads every Garmin Connect dive into YAML or a SQL database.
+		_, _ = fmt.Fprintln(output, `go-garmindives downloads every Garmin Connect dive into SQLite or PostgreSQL.
 SQLite output defaults to dives.db in the current directory.
 Later runs download new dives and add FIT data to dives that do not have it yet.
 Use -activity-id to refresh one dive's metadata, including edited notes.
@@ -121,6 +147,7 @@ Usage:
 Commands:
   sync   Download missing Garmin dives (default)
   serve  Serve stored SQL dives over a REST API
+  admin reset-password  Reset the local administrator password and revoke sessions
 
 Options:`)
 		flags.PrintDefaults()
@@ -131,7 +158,10 @@ Environment:
   GARMIN_EMAIL             Garmin account email; prompted when required and unset
   GARMIN_PASSWORD          Garmin password; securely prompted when required and unset
   GARMIN_MFA_CODE          Current one-time MFA code; prompted when Garmin requests it
-  GARMIN_OUTPUT_TYPE       Output type: sqlite (default), yaml, or postgres
+  GARMIN_CONFIG            YAML application configuration (default config.yaml)
+  GARMIN_DB_TYPE           SQL type; overrides database.type
+  GARMIN_DB_URI            SQL URI; overrides database.uri
+  GARMIN_OUTPUT_TYPE       Legacy SQL-type ENV alias: sqlite or postgres
   GARMIN_OUTPUT_DSN        SQLite path (default dives.db) or PostgreSQL connection URL
   GARMIN_API_ADDR          REST API listen address (default 127.0.0.1:8080)
   LOG_LEVEL                Console verbosity: debug, info, warn, error, or fatal
@@ -160,12 +190,13 @@ Passwords and MFA codes are never written to disk.`)
 	kind := strings.ToLower(strings.TrimSpace(*outputType))
 	endpoint := strings.TrimSpace(*outputDSN)
 	switch kind {
-	case outputYAML:
-		endpoint = *archivePath
 	case outputSQLite:
 		if endpoint == "" {
 			endpoint = "dives.db"
 		}
+	}
+	if err := validateDatabaseConfig(databaseConfig{Type: kind, URI: endpoint}); err != nil {
+		return err
 	}
 	config := outputConfig{Type: kind, Endpoint: endpoint}
 	logger.Debug("configuration resolved", "output_type", config.Type, "token_cache", *tokenPath)
@@ -175,6 +206,15 @@ Passwords and MFA codes are never written to disk.`)
 		return fmt.Errorf("open %s output: %w", config.Type, err)
 	}
 	defer destination.Close()
+	if dependencies.requireInitialization {
+		sql, ok := destination.(*sqlDestination)
+		if !ok || dependencies.config == nil || !dependencies.config.File.Initialized {
+			return errNotConfigured
+		}
+		if err := sql.store.checkInitialization(ctx, dependencies.config.File.InstanceID); err != nil {
+			return errNotConfigured
+		}
+	}
 	archive, existed, err := destination.Load(ctx)
 	if err != nil {
 		return fmt.Errorf("load %s output: %w", config.Type, err)
@@ -214,105 +254,64 @@ Passwords and MFA codes are never written to disk.`)
 }
 
 type openSQLStoreFunc func(context.Context, string, string) (*sqlStore, error)
-type serveAPIFunc func(context.Context, string, *sqlStore, *charmLog.Logger) error
+type serveAPIFunc func(context.Context, string, *application, *charmLog.Logger) error
 
 func runServe(ctx context.Context, args []string, output io.Writer, logger *charmLog.Logger) error {
-	return runServeWithDependencies(ctx, args, output, logger, openSQLStore, serveAPI)
+	return runServeWithDependencies(ctx, args, output, logger, openSQLStore, func(ctx context.Context, address string, app *application, logger *charmLog.Logger) error {
+		return serveAPI(ctx, address, app.Handler(), logger)
+	})
 }
-
 func runServeWithDependencies(ctx context.Context, args []string, output io.Writer, logger *charmLog.Logger, openStore openSQLStoreFunc, serve serveAPIFunc) error {
+	c, err := loadApplicationConfig(args)
+	if err != nil {
+		return err
+	}
 	flags := flag.NewFlagSet("go-garmindives serve", flag.ContinueOnError)
 	flags.SetOutput(output)
-	outputType := flags.String("output-type", envDefault("GARMIN_OUTPUT_TYPE", outputSQLite), "SQL output type: sqlite or postgres")
-	outputDSN := flags.String("output-dsn", strings.TrimSpace(os.Getenv("GARMIN_OUTPUT_DSN")), "SQLite database path or PostgreSQL connection URL")
-	address := flags.String("listen", envDefault("GARMIN_API_ADDR", "127.0.0.1:8080"), "REST API listen address")
-	assetsDirectory := flags.String("assets-dir", envDefault("GARMIN_ASSETS_DIR", "assets"), "directory containing media in <activityID>/<original filename>")
-	maxUploadBytes := flags.String("media-max-upload-bytes", envDefault("GARMIN_MEDIA_MAX_UPLOAD_BYTES", strconv.FormatInt(defaultMediaMaxUpload, 10)), "maximum size of one media upload in bytes (default 16 GiB)")
+	flags.String("config", c.Path, "YAML application configuration file")
+	kind := flags.String("output-type", c.Effective.Database.Type, "SQL database type: sqlite or postgres")
+	uri := flags.String("output-dsn", c.Effective.Database.URI, "SQLite path or PostgreSQL URI")
+	listen := flags.String("listen", c.Effective.HTTP.Listen, "REST API listen address")
+	assets := flags.String("assets-dir", c.Effective.Media.Directory, "media assets directory")
+	maxUpload := flags.String("media-max-upload-bytes", strconv.FormatInt(c.Effective.Media.MaxUploadBytes, 10), "maximum upload size")
 	flags.Usage = func() {
-		_, _ = fmt.Fprintln(output, `Serve synchronized dives from SQLite or PostgreSQL.
-
-Usage:
-  go-garmindives serve [options]
-
-Options:`)
+		fmt.Fprintln(output, `Serve synchronized SQL dives with first-run setup and administrator authentication.
+Usage: go-garmindives serve [options]
+Configuration precedence: flags > ENV > YAML > defaults.
+Environment: GARMIN_CONFIG GARMIN_DB_TYPE GARMIN_DB_URI GARMIN_OUTPUT_TYPE GARMIN_OUTPUT_DSN GARMIN_API_ADDR
+GARMIN_ASSETS_DIR GARMIN_MEDIA_MAX_UPLOAD_BYTES GARMIN_COOKIE_SECURE GARMIN_PUBLIC_URL
+GARMIN_SESSION_LIFETIME GARMIN_SESSION_IDLE_TIMEOUT DEEPL_API_KEY DEEPL_TARGET_LANG DEEPL_REQUEST_INTERVAL
+DEEPL_API_URL DEEPL_GLOSSARY_ID GARMIN_GEOCODING_ENABLED GARMIN_GEOCODING_URL
+GARMIN_GEOCODING_INTERVAL GARMIN_GEOCODING_USER_AGENT LOG_LEVEL`)
 		flags.PrintDefaults()
-		_, _ = fmt.Fprintln(output, `
-Environment:
-  GARMIN_OUTPUT_TYPE  SQL output type: sqlite (default) or postgres
-  GARMIN_OUTPUT_DSN   SQLite database path or PostgreSQL connection URL
-  GARMIN_API_ADDR     Listen address (default 127.0.0.1:8080)
-  GARMIN_ASSETS_DIR   Media directory (default assets)
-  GARMIN_MEDIA_MAX_UPLOAD_BYTES  Maximum upload bytes (default 17179869184)
-  DEEPL_API_KEY       Optional API key for cached French-to-English translations
-  DEEPL_TARGET_LANG   English locale: EN-GB (default) or EN-US
-  DEEPL_REQUEST_INTERVAL  Minimum DeepL request gap (default 2s)
-  DEEPL_API_URL       Optional DeepL origin; :fx keys select api-free.deepl.com
-  DEEPL_GLOSSARY_ID   Optional French-to-English DeepL glossary
-  GARMIN_GEOCODING_ENABLED  Cached Nominatim country lookups (default true)
-  GARMIN_GEOCODING_URL  Geocoder origin (default https://nominatim.openstreetmap.org)
-  GARMIN_GEOCODING_INTERVAL  Minimum background request gap (default 15s)
-  GARMIN_GEOCODING_USER_AGENT  Identifies this app to the geocoder
-  LOG_LEVEL           Console verbosity: debug, info, warn, error, or fatal`)
 	}
 	if err := flags.Parse(args); errors.Is(err, flag.ErrHelp) {
 		return nil
 	} else if err != nil {
 		return err
 	}
-	kind := strings.ToLower(strings.TrimSpace(*outputType))
-	if kind != outputSQLite && kind != outputPostgres {
-		return fmt.Errorf("REST API requires sqlite or postgres output, got %q", kind)
+	if flags.NArg() != 0 {
+		return errors.New("unexpected positional arguments")
 	}
-	endpoint := strings.TrimSpace(*outputDSN)
-	if kind == outputSQLite && endpoint == "" {
-		endpoint = "dives.db"
-	}
-	maxUpload, err := strconv.ParseInt(*maxUploadBytes, 10, 64)
-	if err != nil || maxUpload <= 0 || maxUpload > 1<<60 {
-		return errors.New("media upload limit must be a positive byte count no greater than 2^60")
-	}
-	translationConfig, err := translationConfigFromEnvironment()
+	parsedUpload, err := strconv.ParseInt(*maxUpload, 10, 64)
 	if err != nil {
+		return errors.New("invalid upload limit")
+	}
+	c.Effective.Database = databaseConfig{Type: strings.ToLower(strings.TrimSpace(*kind)), URI: strings.TrimSpace(*uri)}
+	c.Effective.HTTP.Listen = *listen
+	c.Effective.Media = mediaConfig{Directory: *assets, MaxUploadBytes: parsedUpload}
+	fields := map[string]string{"output-type": "database.type", "output-dsn": "database.uri", "listen": "http.listen", "assets-dir": "media.directory", "media-max-upload-bytes": "media.max_upload_bytes"}
+	flags.Visit(func(f *flag.Flag) {
+		if key := fields[f.Name]; key != "" {
+			c.Overrides[key] = "flag:-" + f.Name
+		}
+	})
+	if err := validateApplicationConfig(c.Effective); err != nil {
 		return err
 	}
-	geoConfig, err := geocodingConfigFromEnvironment()
-	if err != nil {
-		return err
-	}
-	store, err := openStore(ctx, kind, endpoint)
-	if err != nil {
-		return err
-	}
-	defer store.Close()
-	media, err := openMediaLibrary(store, *assetsDirectory, maxUpload, logger)
-	if err != nil {
-		return fmt.Errorf("open media assets: %w", err)
-	}
-	defer media.Close()
-	store.media = media
-	if err := store.reconcileTravel(ctx); err != nil {
-		return fmt.Errorf("reconcile countries and trips: %w", err)
-	}
-	if _, err := media.Scan(ctx, false); err != nil {
-		return fmt.Errorf("scan media assets: %w", err)
-	}
-	var translator textTranslator
-	if translationConfig.key != "" {
-		translator = newDeepLClient(translationConfig)
-	}
-	translations := newTranslationService(store, translationConfig, translator, logger)
-	store.translations = translations
-	translations.Start(ctx)
-	defer translations.Close()
-	var lookup countryLookup
-	if geoConfig.enabled {
-		lookup = newNominatimClient(geoConfig)
-	}
-	geocoder := newCountryService(store, geoConfig, lookup, logger)
-	store.geocoder = geocoder
-	geocoder.Start(ctx)
-	defer geocoder.Close()
-	return serve(ctx, strings.TrimSpace(*address), store, logger)
+	app := newApplication(ctx, c, logger, openStore)
+	defer app.Close()
+	return serve(ctx, c.Effective.HTTP.Listen, app, logger)
 }
 
 func envDefault(name, fallback string) string {
@@ -324,7 +323,7 @@ func envDefault(name, fallback string) string {
 
 type clientLoader func() (diveClient, error)
 
-func syncWithAuthentication(ctx context.Context, archive *Archive, loadCached, loginFresh clientLoader, logger *charmLog.Logger, activityID int64) (int, error) {
+func syncWithAuthentication(ctx context.Context, archive *syncState, loadCached, loginFresh clientLoader, logger *charmLog.Logger, activityID int64) (int, error) {
 	reportProgress := func(completed, total int) {
 		logger.Info(fmt.Sprintf("synchronisation in progress... (%d/%d)", completed, total))
 	}

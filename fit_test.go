@@ -225,7 +225,7 @@ func TestFITBackfillAndTransactionalFailure(t *testing.T) {
 	}
 	for _, failure := range []bool{false, true} {
 		t.Run(map[bool]string{false: "backfill", true: "failed backfill"}[failure], func(t *testing.T) {
-			archive := newArchive()
+			archive := newSyncState()
 			old := testSQLDive(t, 42)
 			archive.Dives = []DiveRecord{old, {ID: 43, FIT: document}}
 			client := &fitDiveClient{fakeDiveClient: &fakeDiveClient{activities: []garmin.Activity{
@@ -249,20 +249,15 @@ func TestFITBackfillAndTransactionalFailure(t *testing.T) {
 			if changed, err := syncDives(context.Background(), client, &archive, nil); err != nil || changed != 0 || !reflect.DeepEqual(client.calls, []int64{42}) {
 				t.Fatalf("FIT backfill was repeated: %v", err)
 			}
-			path := filepath.Join(t.TempDir(), "dives.yaml")
-			if err := saveArchive(path, archive); err != nil {
+			store, _ := openTestSQLStore(t)
+			if err := store.SaveDives(context.Background(), []DiveRecord{archive.Dives[1]}); err != nil {
 				t.Fatal(err)
 			}
-			loaded, _, err := loadArchive(path)
-			if err != nil {
-				t.Fatal(err)
+			decoded, err := store.DecodeStoredFIT(context.Background(), archive.Dives[1].ID)
+			if err != nil || decoded.Files[0].OriginalBase64 != archive.Dives[1].FIT.Files[0].OriginalBase64 {
+				t.Fatal("SQL did not preserve original FIT")
 			}
-			if loaded.Dives[1].FIT.Files[0].OriginalBase64 != archive.Dives[1].FIT.Files[0].OriginalBase64 {
-				t.Fatal("YAML did not preserve original FIT")
-			}
-			if _, err := prepareStoredDive(loaded.Dives[1]); err != nil {
-				t.Fatalf("YAML FIT cannot be used by SQL mapper: %v", err)
-			}
+
 		})
 	}
 }
@@ -312,13 +307,13 @@ func TestFITSQLBackfillIsAtomicAndPreservesDocuments(t *testing.T) {
 }
 
 func TestFITBackfillThroughAppDestinations(t *testing.T) {
-	for _, kind := range []string{outputYAML, outputSQLite} {
+	for _, kind := range []string{outputSQLite} {
 		t.Run(kind, func(t *testing.T) {
 			ctx := context.Background()
 			path := filepath.Join(t.TempDir(), "dives")
 			config := outputConfig{Type: kind, Endpoint: path}
 			original := testSQLDive(t, 42)
-			archive := newArchive()
+			archive := newSyncState()
 			archive.Dives = []DiveRecord{original}
 			destination, err := openDestination(ctx, config)
 			if err != nil {
@@ -338,10 +333,7 @@ func TestFITBackfillThroughAppDestinations(t *testing.T) {
 				openDestination: openDestination,
 				loadCached:      func(string) (diveClient, error) { return client, nil },
 			}
-			args := []string{"-output-type", outputYAML, "-output", path}
-			if kind == outputSQLite {
-				args = []string{"-output-type", kind, "-output-dsn", path}
-			}
+			args := []string{"-output-type", kind, "-output-dsn", path}
 			for i := 0; i < 2; i++ {
 				if err := runWithDependencies(ctx, args, &bytes.Buffer{}, testLogger(t), dependencies); err != nil {
 					t.Fatal(err)

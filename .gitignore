@@ -1,5 +1,11 @@
 .env
-dives.yaml
+/config.yaml
+# Private legacy data remains ignored although archive output is unsupported.
+/dives.yaml
+/admin-cookies.txt
+/dives.db
+/dives.db-shm
+/dives.db-wal
 coverage.out
 /go-garmindives
 /assets/

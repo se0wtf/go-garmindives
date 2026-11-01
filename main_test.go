@@ -26,20 +26,20 @@ func testLogger(t *testing.T) *charmLog.Logger {
 }
 
 type fakeDestination struct {
-	archive Archive
+	archive syncState
 	existed bool
 	loadErr error
 	saveErr error
-	saved   Archive
+	saved   syncState
 	added   int
 	closed  bool
 }
 
-func (d *fakeDestination) Load(context.Context) (Archive, bool, error) {
+func (d *fakeDestination) Load(context.Context) (syncState, bool, error) {
 	return d.archive, d.existed, d.loadErr
 }
 
-func (d *fakeDestination) Save(_ context.Context, archive Archive, added int) error {
+func (d *fakeDestination) Save(_ context.Context, archive syncState, added int) error {
 	d.saved, d.added = archive, added
 	return d.saveErr
 }
@@ -97,7 +97,7 @@ func TestRunUsesSQLConfigurationFromEnvironment(t *testing.T) {
 	const dsn = "postgres://secret:password@example.invalid:5432/dives?application_name=private-option"
 	t.Setenv("GARMIN_OUTPUT_DSN", dsn)
 	var config outputConfig
-	destination := &fakeDestination{archive: newArchive(), existed: true}
+	destination := &fakeDestination{archive: newSyncState(), existed: true}
 	dependencies := appDependencies{
 		configDirectory: func() (string, error) { return "/config", nil },
 		openDestination: func(_ context.Context, got outputConfig) (diveDestination, error) {
@@ -125,30 +125,6 @@ func TestRunUsesSQLConfigurationFromEnvironment(t *testing.T) {
 	}
 	if strings.Contains(logs.String(), dsn) || strings.Contains(logs.String(), "secret") || strings.Contains(logs.String(), "password") || strings.Contains(logs.String(), "private-option") {
 		t.Fatalf("database credentials leaked to logs: %q", logs.String())
-	}
-}
-
-func TestYAMLOutputIgnoresSQLDSN(t *testing.T) {
-	t.Setenv("GARMIN_OUTPUT_TYPE", outputPostgres)
-	t.Setenv("GARMIN_OUTPUT_DSN", "postgres://must-not-be-used")
-	var config outputConfig
-	destination := &fakeDestination{archive: newArchive(), existed: true}
-	dependencies := appDependencies{
-		configDirectory: func() (string, error) { return "/config", nil },
-		openDestination: func(_ context.Context, got outputConfig) (diveDestination, error) {
-			config = got
-			return destination, nil
-		},
-		loadCached: func(string) (diveClient, error) {
-			return &fakeDiveClient{activityDetailsErr: map[int64]error{}, diveDetailsErr: map[int64]error{}}, nil
-		},
-		loginFresh: func(context.Context, string) (diveClient, error) { return nil, errors.New("unexpected login") },
-	}
-	if err := runWithDependencies(context.Background(), []string{"-output-type", outputYAML, "-output", "custom.yaml"}, &bytes.Buffer{}, testLogger(t), dependencies); err != nil {
-		t.Fatal(err)
-	}
-	if config != (outputConfig{Type: outputYAML, Endpoint: "custom.yaml"}) {
-		t.Fatalf("YAML output configuration = %#v", config)
 	}
 }
 
@@ -215,7 +191,7 @@ func TestRunDefaultsToSQLite(t *testing.T) {
 	}
 	var config outputConfig
 	var loadedTokenPath string
-	destination := &fakeDestination{archive: newArchive()}
+	destination := &fakeDestination{archive: newSyncState()}
 	dependencies := appDependencies{
 		configDirectory: func() (string, error) { return "/config", nil },
 		openDestination: func(_ context.Context, got outputConfig) (diveDestination, error) {
@@ -253,7 +229,7 @@ func TestRunDefaultsToSQLite(t *testing.T) {
 }
 
 func TestRunWithDependenciesDoesNotRewriteUnchangedArchive(t *testing.T) {
-	destination := &fakeDestination{archive: newArchive(), existed: true}
+	destination := &fakeDestination{archive: newSyncState(), existed: true}
 	dependencies := appDependencies{
 		configDirectory: func() (string, error) { return "/config", nil },
 		openDestination: func(context.Context, outputConfig) (diveDestination, error) { return destination, nil },
@@ -265,7 +241,7 @@ func TestRunWithDependenciesDoesNotRewriteUnchangedArchive(t *testing.T) {
 	if err := runWithDependencies(context.Background(), nil, &bytes.Buffer{}, testLogger(t), dependencies); err != nil {
 		t.Fatal(err)
 	}
-	if destination.saved.Version != 0 {
+	if destination.saved.Dives != nil {
 		t.Fatalf("unexpected saved archive = %#v", destination.saved)
 	}
 }
@@ -273,7 +249,7 @@ func TestRunWithDependenciesDoesNotRewriteUnchangedArchive(t *testing.T) {
 func TestRunWithDependenciesErrors(t *testing.T) {
 	wantErr := errors.New("failure")
 	base := func() appDependencies {
-		destination := &fakeDestination{archive: newArchive()}
+		destination := &fakeDestination{archive: newSyncState()}
 		return appDependencies{
 			configDirectory: func() (string, error) { return "/config", nil },
 			openDestination: func(context.Context, outputConfig) (diveDestination, error) { return destination, nil },
@@ -301,7 +277,7 @@ func TestRunWithDependenciesErrors(t *testing.T) {
 		{"authenticate", nil, func(d *appDependencies) { d.loadCached = func(string) (diveClient, error) { return nil, wantErr } }},
 		{"save", nil, func(d *appDependencies) {
 			d.openDestination = func(context.Context, outputConfig) (diveDestination, error) {
-				return &fakeDestination{archive: newArchive(), saveErr: wantErr}, nil
+				return &fakeDestination{archive: newSyncState(), saveErr: wantErr}, nil
 			}
 		}},
 	}
@@ -327,7 +303,7 @@ func TestRunWithDependenciesErrors(t *testing.T) {
 func TestSyncWithAuthenticationUsesCache(t *testing.T) {
 	cached := &fakeDiveClient{activityDetailsErr: map[int64]error{}, diveDetailsErr: map[int64]error{}}
 	loginCalls := 0
-	archive := newArchive()
+	archive := newSyncState()
 	added, err := syncWithAuthentication(context.Background(), &archive,
 		func() (diveClient, error) { return cached, nil },
 		func() (diveClient, error) { loginCalls++; return nil, nil },
@@ -341,7 +317,7 @@ func TestSyncWithAuthenticationUsesCache(t *testing.T) {
 func TestSyncWithAuthenticationLogsInWithoutCache(t *testing.T) {
 	fresh := &fakeDiveClient{activityDetailsErr: map[int64]error{}, diveDetailsErr: map[int64]error{}}
 	loginCalls := 0
-	archive := newArchive()
+	archive := newSyncState()
 	_, err := syncWithAuthentication(context.Background(), &archive,
 		func() (diveClient, error) { return nil, garmin.ErrNoTokenFile },
 		func() (diveClient, error) { loginCalls++; return fresh, nil },
@@ -356,7 +332,7 @@ func TestSyncWithAuthenticationReauthenticatesExpiredSession(t *testing.T) {
 	cached := &fakeDiveClient{activitiesErr: garmin.ErrSessionExpired}
 	fresh := &fakeDiveClient{activityDetailsErr: map[int64]error{}, diveDetailsErr: map[int64]error{}}
 	loginCalls := 0
-	archive := newArchive()
+	archive := newSyncState()
 	_, err := syncWithAuthentication(context.Background(), &archive,
 		func() (diveClient, error) { return cached, nil },
 		func() (diveClient, error) { loginCalls++; return fresh, nil },
@@ -370,7 +346,7 @@ func TestSyncWithAuthenticationReauthenticatesExpiredSession(t *testing.T) {
 func TestSyncWithAuthenticationDoesNotHideCacheErrors(t *testing.T) {
 	wantErr := errors.New("corrupt token cache")
 	loginCalls := 0
-	archive := newArchive()
+	archive := newSyncState()
 	_, err := syncWithAuthentication(context.Background(), &archive,
 		func() (diveClient, error) { return nil, wantErr },
 		func() (diveClient, error) { loginCalls++; return nil, nil },

@@ -30,9 +30,9 @@ func personalDiveFixture(t *testing.T) json.RawMessage {
 }
 
 // Exercise the published client against an offline Garmin server, including
-// authentication, incremental sync, both storage formats, and the REST API.
+// authentication, incremental sync, SQL storage, and the REST API.
 func TestPersonalAPISync(t *testing.T) {
-	for _, kind := range []string{outputYAML, outputSQLite} {
+	for _, kind := range []string{outputSQLite} {
 		t.Run(kind, func(t *testing.T) {
 			fixture := personalDiveFixture(t)
 			fitBody := testFITZIP(t, map[string][]byte{"dive.fit": testFIT(t)})
@@ -94,12 +94,8 @@ func TestPersonalAPISync(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			outputPath := filepath.Join(directory, "dives.yaml")
-			args := []string{"-output-type", outputYAML, "-output", outputPath}
-			if kind == outputSQLite {
-				outputPath = filepath.Join(directory, "dives.db")
-				args = []string{"-output-type", kind, "-output-dsn", outputPath}
-			}
+			outputPath := filepath.Join(directory, "dives.db")
+			args := []string{"-output-type", kind, "-output-dsn", outputPath}
 			for i := 0; i < 2; i++ {
 				if err := runWithDependencies(context.Background(), args, io.Discard, logger, dependencies); err != nil {
 					t.Fatal(err)
@@ -127,18 +123,6 @@ func TestPersonalAPISync(t *testing.T) {
 			serialized, err := os.ReadFile(personalPath)
 			if err != nil || strings.Contains(string(serialized), key) || strings.Contains(logs.String(), key) || strings.Contains(logs.String(), token) {
 				t.Fatal("Personal API key or token leaked to logs or key persisted")
-			}
-			if kind == outputYAML {
-				archive, existed, err := loadArchive(outputPath)
-				if err != nil || !existed || len(archive.Dives) != 1 || archive.Dives[0].ActivityDetails != nil || archive.Dives[0].FIT == nil {
-					t.Fatalf("invalid Personal API YAML archive: %v", err)
-				}
-				want, err := rawDocument(fixture)
-				got, gotErr := document(archive.Dives[0].DiveDetails)
-				if err != nil || gotErr != nil || !reflect.DeepEqual(got, want) {
-					t.Fatal("YAML archive lost Personal API fields")
-				}
-				return
 			}
 			store, err := openSQLStore(context.Background(), kind, outputPath)
 			if err != nil {
@@ -194,7 +178,7 @@ func TestPersonalAPIAuthenticationFailureDoesNotFallBack(t *testing.T) {
 				personalAPIKey:  "synthetic-key",
 				configDirectory: func() (string, error) { return t.TempDir(), nil },
 				openDestination: func(context.Context, outputConfig) (diveDestination, error) {
-					return &fakeDestination{archive: newArchive()}, nil
+					return &fakeDestination{archive: newSyncState()}, nil
 				},
 				newPersonal: func(_, path string) (diveClient, error) {
 					calls++

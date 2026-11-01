@@ -2,18 +2,34 @@ openapi: 3.0.3
 info:
   title: go-garmindives API
   version: 1.0.0
-  description: |
-    Read synchronized Garmin dives and manage their photos and videos locally.
-    No authentication or Garmin credentials are required by this server.
+  description: 'Read synchronized Garmin dives and manage their photos and videos locally.
+
+    Reads are public after initial setup. Every mutation and configuration endpoint requires an administrator session.
+    Garmin credentials are only needed by the separate sync command.
+
 
     Dive IDs are Garmin activity IDs (SQL dives.id), distinct from Garmin Dive
+
     IDs and dive numbers. Optional measurements are omitted when unavailable;
+
     recorded zeroes are preserved. Depth is in meters, temperature in Celsius,
+
     durations in seconds, and sample timestamps/elapsed times in milliseconds.
 
+
     Media originals retain their filenames and bytes. Metadata and thumbnails
+
     are indexed at server startup or by POST /api/v1/media/scan. Uploads and scans
+
     process files synchronously and can take time for large/360-degree videos.
+
+
+    Initial setup: GET /api/v1/setup/status, POST /api/v1/setup, then poll status until ready. Normal APIs return
+    503 not_configured until setup completes. POST /api/v1/auth/login sets an HttpOnly session cookie; browsers
+    send it automatically on same-origin requests. No JWT or external authentication service is required. Existing
+    SQL dives and original FIT/media data are preserved.
+
+    '
 servers:
   - url: /
     description: The server hosting this specification
@@ -40,10 +56,18 @@ tags:
   - name: Favorites
     description: Favorite media from individual dives, optionally filtered by trip
 
+  - name: Setup
+    description: First-run setup and status, available before SQL configuration
+  - name: Authentication
+    description: Local administrator login and SQL-backed cookie sessions
+  - name: Configuration
+    description: Authenticated settings; changes require restart
+
 paths:
   /api/v1/health:
     get:
-      tags: [Health]
+      tags:
+      - Health
       operationId: getHealth
       summary: Check database connectivity
       responses:
@@ -51,10 +75,19 @@ paths:
           description: The local SQL database is reachable.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Health' }
-              example: { status: ok }
-        '500': { $ref: '#/components/responses/InternalError' }
-
+              schema:
+                $ref: '#/components/schemas/Health'
+              example:
+                status: ok
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/dives:
     get:
       tags:
@@ -97,6 +130,13 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/dives/{id}:
     parameters:
     - $ref: '#/components/parameters/ActivityID'
@@ -125,6 +165,13 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     patch:
       tags:
       - Dives
@@ -161,68 +208,128 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator authentication required or session expired/revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Cross-origin write rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
   /api/v1/dives/{id}/samples:
     parameters:
-      - { $ref: '#/components/parameters/ActivityID' }
+    - $ref: '#/components/parameters/ActivityID'
     get:
-      tags: [Dives]
+      tags:
+      - Dives
       operationId: listDiveSamples
       summary: Read dive profile samples in sample-index order
       parameters:
-        - name: limit
-          in: query
-          schema: { type: integer, minimum: 1, maximum: 10000, default: 5000 }
-        - { $ref: '#/components/parameters/Cursor' }
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 10000
+          default: 5000
+      - $ref: '#/components/parameters/Cursor'
       responses:
         '200':
           description: A page of samples. Missing metrics are omitted; next_cursor is omitted on the last page.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/SampleList' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '500': { $ref: '#/components/responses/InternalError' }
-
+              schema:
+                $ref: '#/components/schemas/SampleList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/dives/{id}/media:
     parameters:
-      - { $ref: '#/components/parameters/ActivityID' }
+    - $ref: '#/components/parameters/ActivityID'
     get:
-      tags: [Media]
+      tags:
+      - Media
       operationId: listDiveMedia
       summary: List attachments, sorted by original filename
       parameters:
-        - { $ref: '#/components/parameters/PageLimit' }
-        - { $ref: '#/components/parameters/Cursor' }
+      - $ref: '#/components/parameters/PageLimit'
+      - $ref: '#/components/parameters/Cursor'
       responses:
         '200':
           description: A page of media. next_cursor is omitted on the last page.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/MediaList' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '500': { $ref: '#/components/responses/InternalError' }
+              schema:
+                $ref: '#/components/schemas/MediaList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     post:
-      tags: [Media]
+      tags:
+      - Media
       operationId: uploadDiveMedia
       summary: Upload one original photo or video
-      description: |
-        Send exactly one multipart field named file, retaining its original
+      description: 'Send exactly one multipart field named file, retaining its original
+
         filename. Filenames cannot start with a dot or contain path separators
+
         or control characters, and are limited to 255 bytes. Existing names
+
         return 409 and are never overwritten, including files not yet indexed.
+
         The default upload limit is 16 GiB; read the current limit from media/status.
+
         Processing is synchronous. An unsupported codec or missing FFmpeg still
+
         returns 201 with thumbnail_status=error; the original remains available.
+
         Spherical projection metadata is detected when present. Use PATCH with
+
         projection="360" for an untagged stitched equirectangular export.
+
+        '
       requestBody:
         required: true
         content:
           multipart/form-data:
             schema:
               type: object
-              required: [file]
+              required:
+              - file
               additionalProperties: false
               properties:
                 file:
@@ -235,17 +342,46 @@ paths:
           headers:
             Location:
               description: Relative URL of the created attachment metadata.
-              schema: { type: string }
+              schema:
+                type: string
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/MediaItem' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
-        '413': { $ref: '#/components/responses/UploadTooLarge' }
-        '415': { $ref: '#/components/responses/UnsupportedMedia' }
-        '500': { $ref: '#/components/responses/InternalError' }
-
+              schema:
+                $ref: '#/components/schemas/MediaItem'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/UploadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMedia'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator authentication required or session expired/revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Cross-origin write rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
   /api/v1/dives/{id}/media/{mediaID}:
     parameters:
     - $ref: '#/components/parameters/ActivityID'
@@ -268,6 +404,13 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     patch:
       tags:
       - Media
@@ -311,6 +454,28 @@ paths:
           $ref: '#/components/responses/Conflict'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator authentication required or session expired/revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Cross-origin write rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
     delete:
       tags:
       - Media
@@ -326,133 +491,274 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator authentication required or session expired/revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Cross-origin write rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
   /api/v1/dives/{id}/media/{mediaID}/thumbnail:
     parameters:
-      - { $ref: '#/components/parameters/ActivityID' }
-      - { $ref: '#/components/parameters/MediaID' }
-      - { $ref: '#/components/parameters/Range' }
-      - { $ref: '#/components/parameters/IfNoneMatch' }
-      - { $ref: '#/components/parameters/IfModifiedSince' }
-      - { $ref: '#/components/parameters/IfRange' }
-      - name: v
-        in: query
-        description: Optional thumbnail version from thumbnail_url; the current thumbnail is always served.
-        schema: { type: string }
+    - $ref: '#/components/parameters/ActivityID'
+    - $ref: '#/components/parameters/MediaID'
+    - $ref: '#/components/parameters/Range'
+    - $ref: '#/components/parameters/IfNoneMatch'
+    - $ref: '#/components/parameters/IfModifiedSince'
+    - $ref: '#/components/parameters/IfRange'
+    - name: v
+      in: query
+      description: Optional thumbnail version from thumbnail_url; the current thumbnail is always served.
+      schema:
+        type: string
     get:
-      tags: [Assets]
+      tags:
+      - Assets
       operationId: getDiveMediaThumbnail
       summary: Serve the JPEG thumbnail, up to 640 pixels per dimension
-      description: Equirectangular 360-degree media uses a 640x360 perspective preview. Other formats use a scaled decoded frame. A missing or failed thumbnail returns 404 thumbnail_unavailable; rescan to retry processing.
+      description: Equirectangular 360-degree media uses a 640x360 perspective preview. Other formats use a scaled
+        decoded frame. A missing or failed thumbnail returns 404 thumbnail_unavailable; rescan to retry processing.
       responses:
         '200':
           description: Complete JPEG thumbnail.
           headers:
-            ETag: { $ref: '#/components/headers/ETag' }
-            Last-Modified: { $ref: '#/components/headers/LastModified' }
-            Accept-Ranges: { $ref: '#/components/headers/AcceptRanges' }
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Last-Modified:
+              $ref: '#/components/headers/LastModified'
+            Accept-Ranges:
+              $ref: '#/components/headers/AcceptRanges'
           content:
             image/jpeg:
-              schema: { type: string, format: binary }
-        '206': { $ref: '#/components/responses/PartialFile' }
-        '304': { $ref: '#/components/responses/NotModified' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '412': { $ref: '#/components/responses/PreconditionFailed' }
-        '416': { $ref: '#/components/responses/RangeNotSatisfiable' }
-        '500': { $ref: '#/components/responses/InternalError' }
+              schema:
+                type: string
+                format: binary
+        '206':
+          $ref: '#/components/responses/PartialFile'
+        '304':
+          $ref: '#/components/responses/NotModified'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '416':
+          $ref: '#/components/responses/RangeNotSatisfiable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     head:
-      tags: [Assets]
+      tags:
+      - Assets
       operationId: headDiveMediaThumbnail
       summary: Read thumbnail headers without downloading it
       responses:
-        '200': { $ref: '#/components/responses/FileHeaders' }
-        '206': { $ref: '#/components/responses/PartialFileHeaders' }
-        '304': { $ref: '#/components/responses/NotModified' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '412': { $ref: '#/components/responses/PreconditionFailed' }
-        '416': { $ref: '#/components/responses/RangeNotSatisfiable' }
-        '500': { $ref: '#/components/responses/InternalError' }
-
+        '200':
+          $ref: '#/components/responses/FileHeaders'
+        '206':
+          $ref: '#/components/responses/PartialFileHeaders'
+        '304':
+          $ref: '#/components/responses/NotModified'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '416':
+          $ref: '#/components/responses/RangeNotSatisfiable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /assets/{id}/{filename}:
     parameters:
-      - { $ref: '#/components/parameters/ActivityID' }
-      - name: filename
-        in: path
-        required: true
-        description: Original filename from MediaItem.filename; URL-encode it or use MediaItem.url directly.
-        schema: { type: string, minLength: 1 }
-        example: Turtle original.jpeg
-      - { $ref: '#/components/parameters/Range' }
-      - { $ref: '#/components/parameters/IfNoneMatch' }
-      - { $ref: '#/components/parameters/IfModifiedSince' }
-      - { $ref: '#/components/parameters/IfRange' }
+    - $ref: '#/components/parameters/ActivityID'
+    - name: filename
+      in: path
+      required: true
+      description: Original filename from MediaItem.filename; URL-encode it or use MediaItem.url directly.
+      schema:
+        type: string
+        minLength: 1
+      example: Turtle original.jpeg
+    - $ref: '#/components/parameters/Range'
+    - $ref: '#/components/parameters/IfNoneMatch'
+    - $ref: '#/components/parameters/IfModifiedSince'
+    - $ref: '#/components/parameters/IfRange'
     get:
-      tags: [Assets]
+      tags:
+      - Assets
       operationId: getMediaOriginal
       summary: Serve an original photo or video
-      description: |
-        Streams original bytes with their stored Content-Type and inline filename.
+      description: 'Streams original bytes with their stored Content-Type and inline filename.
+
         Range requests support video seeking. If an indexed file changed on disk,
+
         returns 409 media_changed until a rescan refreshes its metadata. Directory
+
         browsing is disabled. The frontend can use effective_projection and
+
         projection_format to select a 360-degree player; the server preserves
+
         the original container without transcoding or stitching camera footage.
+
+        '
       responses:
-        '200': { $ref: '#/components/responses/CompleteFile' }
-        '206': { $ref: '#/components/responses/PartialFile' }
-        '304': { $ref: '#/components/responses/NotModified' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
-        '412': { $ref: '#/components/responses/PreconditionFailed' }
-        '416': { $ref: '#/components/responses/RangeNotSatisfiable' }
-        '500': { $ref: '#/components/responses/InternalError' }
+        '200':
+          $ref: '#/components/responses/CompleteFile'
+        '206':
+          $ref: '#/components/responses/PartialFile'
+        '304':
+          $ref: '#/components/responses/NotModified'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '416':
+          $ref: '#/components/responses/RangeNotSatisfiable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     head:
-      tags: [Assets]
+      tags:
+      - Assets
       operationId: headMediaOriginal
       summary: Read original-file headers without downloading it
       responses:
-        '200': { $ref: '#/components/responses/FileHeaders' }
-        '206': { $ref: '#/components/responses/PartialFileHeaders' }
-        '304': { $ref: '#/components/responses/NotModified' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
-        '412': { $ref: '#/components/responses/PreconditionFailed' }
-        '416': { $ref: '#/components/responses/RangeNotSatisfiable' }
-        '500': { $ref: '#/components/responses/InternalError' }
-
+        '200':
+          $ref: '#/components/responses/FileHeaders'
+        '206':
+          $ref: '#/components/responses/PartialFileHeaders'
+        '304':
+          $ref: '#/components/responses/NotModified'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '416':
+          $ref: '#/components/responses/RangeNotSatisfiable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/media/scan:
     post:
-      tags: [Media]
+      tags:
+      - Media
       operationId: scanMediaAssets
       summary: Reconcile media metadata and thumbnails with the assets directory
-      description: |
-        Scans assets/<activityID>/<original filename>. Adds new files, updates
+      description: 'Scans assets/<activityID>/<original filename>. Adds new files, updates
+
         changed files, retries missing/failed thumbnails, and removes index
+
         entries for deleted originals. Unknown activity folders, symlinks, nested
+
         folders, and unsupported extensions are skipped. The request waits for
+
         completion. Individual processing failures are counted and logged while
+
         other files continue; a scan can return 200 with failed greater than zero.
+
+        '
       parameters:
-        - name: force
-          in: query
-          description: Hash and reprocess every file, including unchanged size/mtime. Defaults to false.
-          schema: { type: boolean, default: false }
+      - name: force
+        in: query
+        description: Hash and reprocess every file, including unchanged size/mtime. Defaults to false.
+        schema:
+          type: boolean
+          default: false
       responses:
         '200':
           description: Scan completed; failed includes indexing or thumbnail failures.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/MediaScanResult' }
-              example: { scanned: 10, added: 2, updated: 1, unchanged: 7, removed: 0, skipped: 0, failed: 0 }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '500': { $ref: '#/components/responses/InternalError' }
-
+              schema:
+                $ref: '#/components/schemas/MediaScanResult'
+              example:
+                scanned: 10
+                added: 2
+                updated: 1
+                unchanged: 7
+                removed: 0
+                skipped: 0
+                failed: 0
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator authentication required or session expired/revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Cross-origin write rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
   /api/v1/media/status:
     get:
-      tags: [Media]
+      tags:
+      - Media
       operationId: getMediaStatus
       summary: Read indexed media totals and configured upload limits
       responses:
@@ -460,30 +766,58 @@ paths:
           description: Global totals across all activities and the active server's upload/thumbnail limits.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/MediaStatus' }
-              example: { total: 12, photos: 10, videos: 2, thumbnails_ready: 11, thumbnails_failed: 1, max_upload_bytes: 17179869184, thumbnail_max_dimension: 640 }
-        '500': { $ref: '#/components/responses/InternalError' }
-
+              schema:
+                $ref: '#/components/schemas/MediaStatus'
+              example:
+                total: 12
+                photos: 10
+                videos: 2
+                thumbnails_ready: 11
+                thumbnails_failed: 1
+                max_upload_bytes: 17179869184
+                thumbnail_max_dimension: 640
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/translations/status:
     get:
-      tags: [Translations]
+      tags:
+      - Translations
       operationId: getTranslationStatus
       summary: Read English translation progress and configuration
-      description: Counts refer to unique active note/media text revisions. Cached revisions also includes older versions retained for reuse. Empty text needs no provider request.
+      description: Counts refer to unique active note/media text revisions. Cached revisions also includes older versions
+        retained for reuse. Empty text needs no provider request.
       responses:
         '200':
           description: Translation worker status; no API key or source text is exposed.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/TranslationStatus' }
-        '500': { $ref: '#/components/responses/InternalError' }
-
+              schema:
+                $ref: '#/components/schemas/TranslationStatus'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/translations/retry:
     post:
-      tags: [Translations]
+      tags:
+      - Translations
       operationId: retryTranslations
       summary: Retry failed English translations and resume a blocked worker
-      description: Requeues failed entries and clears an authentication/quota pause. Ready cached translations are preserved. Correct credentials require restarting serve with the new DEEPL_API_KEY; retry after increasing a provider quota to resume without restarting.
+      description: Requeues failed entries and clears an authentication/quota pause. Ready cached translations are
+        preserved. Correct credentials require restarting serve with the new DEEPL_API_KEY; retry after increasing
+        a provider quota to resume without restarting.
       responses:
         '202':
           description: Retries queued for background processing.
@@ -491,16 +825,37 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [status]
+                required:
+                - status
                 properties:
-                  status: { type: string, enum: [queued] }
+                  status:
+                    type: string
+                    enum:
+                    - queued
         '503':
-          description: Translation disabled; configure DEEPL_API_KEY and restart serve.
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
-        '500': { $ref: '#/components/responses/InternalError' }
-
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '401':
+          description: Administrator authentication required or session expired/revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Cross-origin write rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
   /api/v1/countries:
     get:
       tags:
@@ -526,6 +881,13 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/countries/status:
     get:
       tags:
@@ -547,6 +909,13 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/countries/retry:
     post:
       tags:
@@ -574,11 +943,27 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
         '503':
-          description: Geocoding disabled; configure and restart serve.
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator authentication required or session expired/revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Cross-origin write rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
   /api/v1/home-countries:
     get:
       tags:
@@ -598,6 +983,13 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     post:
       tags:
       - Home countries
@@ -630,6 +1022,28 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator authentication required or session expired/revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Cross-origin write rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
   /api/v1/home-countries/{homeID}:
     parameters:
     - $ref: '#/components/parameters/HomeID'
@@ -651,6 +1065,13 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     patch:
       tags:
       - Home countries
@@ -681,6 +1102,28 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator authentication required or session expired/revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Cross-origin write rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
     delete:
       tags:
       - Home countries
@@ -695,6 +1138,28 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator authentication required or session expired/revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Cross-origin write rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
   /api/v1/trips:
     get:
       tags:
@@ -747,6 +1212,13 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     post:
       tags:
       - Trips
@@ -771,6 +1243,28 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator authentication required or session expired/revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Cross-origin write rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
   /api/v1/trips/rebuild:
     post:
       tags:
@@ -800,6 +1294,28 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator authentication required or session expired/revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Cross-origin write rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
   /api/v1/trips/{tripID}:
     parameters:
     - $ref: '#/components/parameters/TripID'
@@ -821,6 +1337,13 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     patch:
       tags:
       - Trips
@@ -845,6 +1368,28 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator authentication required or session expired/revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Cross-origin write rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
     delete:
       tags:
       - Trips
@@ -861,6 +1406,28 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator authentication required or session expired/revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Cross-origin write rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
   /api/v1/trips/{tripID}/dives:
     parameters:
     - $ref: '#/components/parameters/TripID'
@@ -904,6 +1471,13 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/trips/{tripID}/dives/{id}:
     parameters:
     - $ref: '#/components/parameters/TripID'
@@ -924,6 +1498,28 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator authentication required or session expired/revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Cross-origin write rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
     delete:
       tags:
       - Trips
@@ -940,6 +1536,28 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator authentication required or session expired/revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Cross-origin write rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
   /api/v1/media/favorites:
     get:
       tags:
@@ -963,6 +1581,13 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/trips/{tripID}/media:
     parameters:
     - $ref: '#/components/parameters/TripID'
@@ -987,6 +1612,13 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     post:
       tags:
       - Trips
@@ -1049,6 +1681,28 @@ paths:
           $ref: '#/components/responses/UnsupportedMedia'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator authentication required or session expired/revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Cross-origin write rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
   /api/v1/trips/{tripID}/media/{mediaID}:
     parameters:
     - $ref: '#/components/parameters/TripID'
@@ -1071,6 +1725,13 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     patch:
       tags:
       - Trips
@@ -1106,6 +1767,28 @@ paths:
           $ref: '#/components/responses/Conflict'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator authentication required or session expired/revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Cross-origin write rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
     delete:
       tags:
       - Trips
@@ -1121,6 +1804,28 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator authentication required or session expired/revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Cross-origin write rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
   /api/v1/trips/{tripID}/media/{mediaID}/thumbnail:
     parameters:
     - $ref: '#/components/parameters/TripID'
@@ -1170,6 +1875,13 @@ paths:
           $ref: '#/components/responses/RangeNotSatisfiable'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     head:
       tags:
       - Trips
@@ -1192,6 +1904,13 @@ paths:
           $ref: '#/components/responses/RangeNotSatisfiable'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /assets/trips/{tripID}/{filename}:
     parameters:
     - $ref: '#/components/parameters/TripID'
@@ -1244,6 +1963,13 @@ paths:
           $ref: '#/components/responses/RangeNotSatisfiable'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     head:
       tags:
       - Assets
@@ -1268,8 +1994,456 @@ paths:
           $ref: '#/components/responses/RangeNotSatisfiable'
         '500':
           $ref: '#/components/responses/InternalError'
-
+        '503':
+          description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
+            configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/setup/status:
+    get:
+      tags:
+      - Setup
+      operationId: getSetupStatus
+      summary: Read persistent configuration state and runtime readiness
+      security: []
+      description: Available without SQL configuration or authentication. Redirect to setup only when configured=false.
+        configured=true with ready=false is an outage/startup state, not permission to initialize again.
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetupStatus'
+  /api/v1/setup/countries:
+    get:
+      tags:
+      - Setup
+      operationId: listSetupCountries
+      summary: List country choices before SQL initialization
+      security: []
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CountryList'
+  /api/v1/setup:
+    post:
+      tags:
+      - Setup
+      operationId: completeInitialSetup
+      summary: Configure SQL, administrator password, and residence history
+      security: []
+      description: Public first-run setup, without an extra token. Existing dive/FIT/media data is preserved. Saves
+        YAML atomically and initializes SQL. Poll setup/status until ready, then log in. Once configured this endpoint
+        stays closed, including during database failures. Adopting an already initialized SQL database requires its
+        existing administrator password.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetupRequest'
+      responses:
+        '201':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetupResult'
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Not configured, starting, or database unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Cross-origin write rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Password attempt rate limit exceeded; Retry-After gives a delay in seconds.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Already configured, setup in progress, or SQL initialization changed concurrently.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Adopting an existing initialized database requires its current administrator password.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Configuration file could not be saved; SQL initialization was rolled back.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '415':
+          description: Use application/json for the request body.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/auth/session:
+    get:
+      tags:
+      - Authentication
+      operationId: getAdministratorSession
+      summary: Read current login state
+      security: []
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSession'
+        '503':
+          description: Not configured, starting, or database unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/auth/login:
+    post:
+      tags:
+      - Authentication
+      operationId: loginAdministrator
+      summary: Log in and set an administrator session cookie
+      security: []
+      description: Same-origin browser requests only; no wildcard credentialed CORS. Cookie is HttpOnly, Secure in
+        production, SameSite=Strict, Path=/. Session token is rotated at login. Session records are persisted as token
+        digests in SQL.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSession'
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+              description: Browser session cookie. Do not copy it into localStorage.
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Not configured, starting, or database unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Cross-origin write rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Password attempt rate limit exceeded; Retry-After gives a delay in seconds.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Invalid administrator password.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '415':
+          description: Use application/json for the request body.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/auth/logout:
+    post:
+      tags:
+      - Authentication
+      operationId: logoutAdministrator
+      summary: Revoke the current session and clear its cookie
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
+      responses:
+        '204':
+          description: Success; no response body.
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+              description: Expires the session cookie.
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Not configured, starting, or database unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator authentication required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Cross-origin write rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/auth/password:
+    post:
+      tags:
+      - Authentication
+      operationId: changeAdministratorPassword
+      summary: Change password and revoke all sessions
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSession'
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Not configured, starting, or database unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator authentication required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Cross-origin write rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Password attempt rate limit exceeded; Retry-After gives a delay in seconds.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Credentials changed concurrently; sign in again.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '415':
+          description: Use application/json for the request body.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/config:
+    get:
+      tags:
+      - Configuration
+      operationId: getApplicationConfiguration
+      summary: Read effective and pending settings without connection secrets
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Configuration'
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Not configured, starting, or database unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator authentication required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    patch:
+      tags:
+      - Configuration
+      operationId: updateApplicationConfiguration
+      summary: Save SQL settings for the next restart
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
+      description: Only SQL database settings are currently editable here. Existing ENV and explicit flag overrides
+        remain authoritative. Does not switch databases or migrate data live. Restart both backend roles after explicitly
+        migrating/copying initialized SQL data.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfigurationPatch'
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Configuration'
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Not configured, starting, or database unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator authentication required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Cross-origin write rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '415':
+          description: Use application/json for the request body.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /healthz:
+    get:
+      tags:
+      - Health
+      operationId: getLiveness
+      summary: Check process liveness
+      security: []
+      description: Available before initialization; suitable for process liveness, not setup readiness.
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum:
+                    - ok
+                required:
+                - status
+  /readyz:
+    get:
+      tags:
+      - Health
+      operationId: getReadiness
+      summary: Check whether normal configured APIs are ready
+      security: []
+      description: 503 until setup and runtime startup complete, or if a live SQL connection health check fails. Use
+        this to gate the sync container, while allowing the frontend to start before setup.
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum:
+                    - ready
+                required:
+                - status
+        '503':
+          description: Not configured, starting, or database unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 components:
+  securitySchemes:
+    adminSession:
+      type: apiKey
+      in: cookie
+      name: __Host-garmindives_session
+      description: Issued by POST /api/v1/auth/login. Secure, HttpOnly, SameSite=Strict, host-only session cookie. Use
+        login first in Swagger; browser cookies cannot be set by the Authorize dialog.
+    adminSessionDevelopment:
+      type: apiKey
+      in: cookie
+      name: garmindives_session
+      description: Local HTTP development only when GARMIN_COOKIE_SECURE=false. Production uses adminSession over HTTPS.
   parameters:
     TripID:
       name: tripID
@@ -2436,3 +3610,245 @@ components:
       required:
       - year
       - country_code
+
+    SetupStatus:
+      type: object
+      properties:
+        configured:
+          type: boolean
+          description: Persistent setup state; stays true during outages or after removing residence periods.
+        ready:
+          type: boolean
+          description: Normal API/runtime is active.
+        state:
+          type: string
+          description: not_configured, starting, ready, or an availability/configuration error.
+        database_type:
+          type: string
+          enum:
+          - sqlite
+          - postgres
+        database_uri_configured:
+          type: boolean
+        overrides:
+          type: object
+          additionalProperties:
+            type: string
+          description: Setting name to controlling ENV variable or command flag. Contains no setting values.
+        password_min_length:
+          type: integer
+          example: 15
+        password_max_length:
+          type: integer
+          example: 128
+      required:
+      - configured
+      - ready
+      - state
+      - database_type
+      - database_uri_configured
+      - overrides
+      - password_min_length
+      - password_max_length
+    DatabasePatch:
+      type: object
+      properties:
+        type:
+          type: string
+          enum:
+          - sqlite
+          - postgres
+        uri:
+          type: string
+          maxLength: 8192
+          description: 'Persistent SQLite filename/file: URI, or PostgreSQL URI/DSN. ENV/flag overrides remain authoritative.
+            Omit unchanged ENV-managed settings.'
+      additionalProperties: false
+      minProperties: 1
+    SetupResidence:
+      type: object
+      properties:
+        country_code:
+          type: string
+          description: Country code or French/English name.
+        from:
+          type: string
+          format: date
+        to:
+          type: string
+          format: date
+          nullable: true
+          description: Inclusive end date; null/omitted is open-ended.
+      additionalProperties: false
+      required:
+      - country_code
+      - from
+    SetupRequest:
+      type: object
+      properties:
+        database:
+          $ref: '#/components/schemas/DatabasePatch'
+        admin_password:
+          type: string
+          format: password
+          maxLength: 128
+          description: 'New administrator password: 15–128 Unicode characters, passphrases allowed, common/repeated
+            patterns rejected. For an already initialized database, provide its existing password to adopt it without
+            resetting credentials.'
+        home_countries:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/SetupResidence'
+          description: At least one residence period must exist after first setup. Existing identical periods are reused;
+            overlaps rejected. Existing initialized databases retain their residence history.
+      additionalProperties: false
+      required:
+      - admin_password
+    SetupResult:
+      type: object
+      properties:
+        configured:
+          type: boolean
+          example: true
+        ready:
+          type: boolean
+          example: false
+        state:
+          type: string
+          example: starting
+      required:
+      - configured
+      - ready
+      - state
+    LoginRequest:
+      type: object
+      properties:
+        password:
+          type: string
+          format: password
+          maxLength: 128
+      additionalProperties: false
+      required:
+      - password
+    ChangePasswordRequest:
+      type: object
+      properties:
+        current_password:
+          type: string
+          format: password
+          maxLength: 128
+        new_password:
+          type: string
+          format: password
+          minLength: 15
+          maxLength: 128
+          description: Spaces and Unicode are supported; common/repeated patterns are rejected. Password changes revoke
+            every administrator session.
+      additionalProperties: false
+      required:
+      - current_password
+      - new_password
+    AuthSession:
+      type: object
+      properties:
+        authenticated:
+          type: boolean
+        expires_at:
+          type: string
+          format: date-time
+          description: Absolute expiry; idle expiry can occur earlier. Omitted for anonymous sessions.
+      required:
+      - authenticated
+    DatabaseDisplay:
+      type: object
+      properties:
+        type:
+          type: string
+          enum:
+          - sqlite
+          - postgres
+        uri_display:
+          type: string
+          description: Safe display destination only; credentials and PostgreSQL URI options are omitted. This is not
+            a replacement connection URI.
+        uri_configured:
+          type: boolean
+      required:
+      - type
+      - uri_display
+      - uri_configured
+    HTTPSettings:
+      type: object
+      properties:
+        listen:
+          type: string
+        cookie_secure:
+          type: boolean
+        public_url:
+          type: string
+          description: Optional external origin for reverse-proxy CSRF validation.
+      required:
+      - listen
+      - cookie_secure
+    AuthSettings:
+      type: object
+      properties:
+        session_lifetime:
+          type: string
+          example: 24h
+          description: Go duration between 1m and 720h.
+        idle_timeout:
+          type: string
+          example: 2h
+          description: Go duration between 1m and session_lifetime.
+      required:
+      - session_lifetime
+      - idle_timeout
+    MediaSettings:
+      type: object
+      properties:
+        directory:
+          type: string
+        max_upload_bytes:
+          type: integer
+          format: int64
+      required:
+      - directory
+      - max_upload_bytes
+    Configuration:
+      type: object
+      properties:
+        database:
+          $ref: '#/components/schemas/DatabaseDisplay'
+        pending_database:
+          $ref: '#/components/schemas/DatabaseDisplay'
+        http:
+          $ref: '#/components/schemas/HTTPSettings'
+        auth:
+          $ref: '#/components/schemas/AuthSettings'
+        media:
+          $ref: '#/components/schemas/MediaSettings'
+        overrides:
+          type: object
+          additionalProperties:
+            type: string
+        restart_required:
+          type: boolean
+          description: Database settings were saved; running connection remains unchanged until restart.
+      required:
+      - database
+      - pending_database
+      - http
+      - auth
+      - media
+      - overrides
+      - restart_required
+    ConfigurationPatch:
+      type: object
+      properties:
+        database:
+          $ref: '#/components/schemas/DatabasePatch'
+      additionalProperties: false
+      required:
+      - database

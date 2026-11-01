@@ -20,11 +20,27 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: garmindives_test
+          POSTGRES_PASSWORD: garmindives_test
+          POSTGRES_DB: garmindives_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U garmindives_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_POSTGRES_DSN: postgres://garmindives_test:garmindives_test@localhost:5432/garmindives_test?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: stable
+          go-version: '1.26.x'
       - run: go test ./...
       - run: go test -race ./...
       - run: go vet ./...

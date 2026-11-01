@@ -43,19 +43,13 @@ func TestGarminPersonalDiveIntegration(t *testing.T) {
 		t.Skip("live account has no dives to validate")
 	}
 	selected := selectedDiveClient{Client: client, activities: dives}
-	archive := newArchive()
+	archive := newSyncState()
 	added, err := syncDives(ctx, selected, &archive, nil)
 	if err != nil || added != 1 || len(archive.Dives) != 1 || archive.Dives[0].ActivityDetails != nil || archive.Dives[0].FIT == nil {
 		t.Fatalf("Personal API sync: added=%d, err=%v", added, err)
 	}
-	path := filepath.Join(directory, "dives.yaml")
-	if err := saveArchive(path, archive); err != nil {
-		t.Fatal(err)
-	}
-	loaded, existed, err := loadArchive(path)
-	if err != nil || !existed || len(loaded.Dives) != 1 {
-		t.Fatalf("Personal API YAML round trip failed: %v", err)
-	}
+	loaded := archive
+
 	if added, err := syncDives(ctx, selected, &loaded, nil); err != nil || added != 0 {
 		t.Fatalf("second Personal API sync: added=%d, err=%v", added, err)
 	}
@@ -91,7 +85,7 @@ func TestGarminPersonalDiveIntegration(t *testing.T) {
 	if withDepth == 0 || string(detail.FIT) == "null" {
 		t.Fatal("live dive FIT did not produce a depth-over-time profile")
 	}
-	t.Logf("verified Personal API FIT decoding, %d depth samples, YAML/SQLite output, and incremental synchronization", withDepth)
+	t.Logf("verified Personal API FIT decoding, %d depth samples, SQLite output, and incremental synchronization", withDepth)
 }
 
 type selectedDiveClient struct {
@@ -120,7 +114,7 @@ func TestGarminDiveIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	archive := newArchive()
+	archive := newSyncState()
 	added, err := syncDives(context.Background(), client, &archive, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -128,14 +122,21 @@ func TestGarminDiveIntegration(t *testing.T) {
 	if added == 0 {
 		t.Fatal("live account returned no dives")
 	}
-	archivePath := filepath.Join(directory, "dives.yaml")
-	if err := saveArchive(archivePath, archive); err != nil {
+	store, err := openSQLStore(context.Background(), outputSQLite, filepath.Join(directory, "dives.db"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	loaded, existed, err := loadArchive(archivePath)
-	if err != nil || !existed || len(loaded.Dives) != added {
-		t.Fatalf("loaded %d dives, existed=%v, err=%v", len(loaded.Dives), existed, err)
+	defer store.Close()
+	if err := store.SaveDives(context.Background(), archive.Dives); err != nil {
+		t.Fatal(err)
 	}
+	state, err := store.DiveSyncState(context.Background())
+	if err != nil || len(state) != added {
+		t.Fatalf("SQL sync state: %v", err)
+	}
+	loaded := newSyncState()
+	loaded.Dives = state
+
 	secondAdded, err := syncDives(context.Background(), client, &loaded, nil)
 	if err != nil || secondAdded != 0 {
 		t.Fatalf("second sync added %d dives: %v", secondAdded, err)
@@ -220,31 +221,36 @@ func TestPostgresStoreIntegration(t *testing.T) {
 			t.Fatalf("PostgreSQL original FIT could not be decoded locally: %v", err)
 		}
 	})
-}
-
-func TestDiveArchiveSQLIntegration(t *testing.T) {
-	archivePath := os.Getenv("TEST_DIVE_ARCHIVE")
-	if archivePath == "" {
-		t.Skip("set TEST_DIVE_ARCHIVE to validate a complete YAML archive against SQLite")
-	}
-	archive, existed, err := loadArchive(archivePath)
-	if err != nil || !existed || len(archive.Dives) == 0 {
-		t.Fatalf("load archive: dives=%d, existed=%v, err=%v", len(archive.Dives), existed, err)
-	}
-	store, err := openSQLStore(context.Background(), outputSQLite, filepath.Join(t.TempDir(), "dives.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	if err := store.SaveDives(context.Background(), archive.Dives); err != nil {
-		t.Fatal(err)
-	}
-	ids, err := store.DiveIDs(context.Background())
-	if err != nil || len(ids) != len(archive.Dives) {
-		t.Fatalf("stored IDs=%d, archive dives=%d, err=%v", len(ids), len(archive.Dives), err)
-	}
-	var samples int
-	if err := store.db.QueryRow(`SELECT COUNT(*) FROM dive_samples`).Scan(&samples); err != nil || samples == 0 {
-		t.Fatalf("stored samples=%d, err=%v", samples, err)
-	}
+	t.Run("setup and administrator sessions", func(t *testing.T) {
+		clearApplicationEnvironment(t)
+		directory := t.TempDir()
+		file := defaultApplicationConfig()
+		file.Database = databaseConfig{Type: outputPostgres, URI: parsed.String()}
+		file.Media.Directory = filepath.Join(directory, "assets")
+		c, err := resolveApplicationConfig(filepath.Join(directory, "config.yaml"), file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		a := newApplication(ctx, c, testLogger(t), openSQLStore)
+		defer a.Close()
+		setupApplication(t, a, c)
+		cookie := loginApplication(t, a, testAdminPassword)
+		appJSON[configurationResponse](t, a, "GET", "/api/v1/config", nil, cookie, 200)
+		var storageType, tokenHash string
+		if err := store.db.QueryRowContext(ctx, `SELECT pg_typeof(data)::text,token_hash FROM admin_sessions`).Scan(&storageType, &tokenHash); err != nil || storageType != "bytea" || tokenHash != sessionDigest(cookie.Value) {
+			t.Fatalf("PostgreSQL session persistence: type=%s err=%v", storageType, err)
+		}
+		periods := appJSON[struct {
+			Items []homeCountry `json:"items"`
+		}](t, a, "GET", "/api/v1/home-countries", nil, nil, 200)
+		if len(periods.Items) != 1 || periods.Items[0].Country.Code != "FR" || periods.Items[0].To != nil {
+			t.Fatal("PostgreSQL setup lost open-ended residence period")
+		}
+		appJSON[authSessionResponse](t, a, "POST", "/api/v1/auth/password", map[string]string{"current_password": testAdminPassword, "new_password": "Another wonderful coral garden!"}, cookie, 200)
+		appJSON[errorResponse](t, a, "GET", "/api/v1/config", nil, cookie, 401)
+		loginApplication(t, a, "Another wonderful coral garden!")
+		if _, err := store.Dive(ctx, 42); err != nil {
+			t.Fatalf("PostgreSQL setup changed existing dive: %v", err)
+		}
+	})
 }

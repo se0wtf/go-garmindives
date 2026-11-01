@@ -606,9 +606,10 @@ func TestRunServeScansAssetsBeforeListening(t *testing.T) {
 	}
 	var logs bytes.Buffer
 	logger, _ := newAppLogger(&logs, "info")
-	err := runServeWithDependencies(context.Background(), []string{"-assets-dir", dir, "-media-max-upload-bytes", "123456"}, io.Discard, logger,
+	err := runServeWithDependencies(context.Background(), configuredServeArgs(t, store, []string{"-assets-dir", dir, "-media-max-upload-bytes", "123456"}), io.Discard, logger,
 		func(context.Context, string, string) (*sqlStore, error) { return store, nil },
-		func(ctx context.Context, _ string, got *sqlStore, _ *charmLog.Logger) error {
+		func(ctx context.Context, _ string, app *application, _ *charmLog.Logger) error {
+			got := waitApplicationReady(t, app).store
 			items, err := got.mediaForDive(ctx, 42)
 			if err != nil || len(items) != 1 || items[0].Filename != "copied.mov" || got.media.maxUpload != 123456 {
 				t.Fatalf("startup media = %+v, %v", items, err)
