@@ -9,6 +9,16 @@ attached to each activity, with originals on disk and media metadata in SQL.
 
 The app is unofficial and is not affiliated with Garmin.
 
+For product concepts, frontend integration flows, backend algorithms, storage,
+security, deployment, and reimplementation acceptance scenarios, start with
+[`SPECS.md`](SPECS.md). The OpenAPI contract complements those guides with exact
+HTTP request/response schemas.
+
+Source packages and test locations are described in
+[repository organization](docs/specs/repository.md). The root executable delegates
+to `internal/app`; independent parsing, configuration, provider, security, and
+media-processing code lives in dedicated internal packages.
+
 ## Install
 
 Requires Go 1.26 or newer.
@@ -758,7 +768,8 @@ and symlinks are skipped. Supported extensions include JPEG/JPS, PNG, GIF, WebP,
 HEIC/HEIF, AVIF, TIFF, BMP, MP4/M4V, MOV, MKV, WebM, AVI, MTS/M2TS, 3GP, INSV, and .360.
 Actual metadata/thumbnail support depends on the installed FFmpeg build.
 
-Every `serve` startup scans the assets directory **before listening**. It adds
+Every `serve` activation scans the assets directory **before normal APIs become
+ready**; setup/status, documentation, and liveness are already reachable. It adds
 new files, updates changed files, rebuilds missing/failed thumbnails, and removes
 index entries and cached thumbnails for originals deleted from disk. Unchanged
 files are skipped using size and modification time. Folders whose activities
@@ -882,7 +893,7 @@ Garmin or waiting through real cooldowns.
 To validate the official API against one real dive with temporary SQLite storage, set `GARMIN_PERSONAL_API_KEY` and run:
 
 ```sh
-go test -run '^TestGarminPersonalDiveIntegration$' -count=1 -v
+go test ./internal/app -run '^TestGarminPersonalDiveIntegration$' -count=1 -v
 ```
 
 The test checks the real FIT depth profile as well as persistence and incremental
@@ -893,14 +904,14 @@ verifies that a second synchronization adds nothing:
 
 ```sh
 GARMIN_EMAIL='...' GARMIN_PASSWORD='...' GARMIN_MFA_CODE='...' \
-  go test -run TestGarminDiveIntegration -count=1 -v
+  go test ./internal/app -run TestGarminDiveIntegration -count=1 -v
 ```
 
 SQLite storage is covered by the default hermetic suite. PostgreSQL can also be
 validated against a disposable database:
 
 ```sh
-TEST_POSTGRES_DSN='postgres://...' go test -run TestPostgresStoreIntegration -v
+TEST_POSTGRES_DSN='postgres://...' go test ./internal/app -run TestPostgresStoreIntegration -v
 ```
 
 ## Credits
