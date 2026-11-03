@@ -5,9 +5,39 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"sort"
 
 	appconfig "github.com/se0wtf/go-garmindives/internal/config"
+	countrydata "github.com/se0wtf/go-garmindives/internal/country"
 )
+
+// DiveCountries lists effective destinations in the stored logbook. Overrides
+// replace detected countries, and unresolved dives contribute no choice.
+func (s *sqlStore) DiveCountries(ctx context.Context) ([]countrydata.Country, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT COALESCE(country_override,country_code)
+		FROM dives WHERE COALESCE(country_override,country_code,'')<>''`)
+	if err != nil {
+		return nil, fmt.Errorf("list dive countries: %w", err)
+	}
+	defer rows.Close()
+	items := []countrydata.Country{}
+	seen := map[string]bool{}
+	for rows.Next() {
+		var code string
+		if err := rows.Scan(&code); err != nil {
+			return nil, fmt.Errorf("read dive country: %w", err)
+		}
+		if c := countrydata.ByCode(code); c != nil && !seen[c.Code] {
+			items = append(items, *c)
+			seen[c.Code] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list dive countries: %w", err)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Code < items[j].Code })
+	return items, nil
+}
 
 func coordinatesKey(lat, lon float64) string { return fmt.Sprintf("country-v1:%.6f,%.6f", lat, lon) }
 func validCoordinates(lat, lon sql.NullFloat64) bool {

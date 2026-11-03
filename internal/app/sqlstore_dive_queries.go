@@ -106,8 +106,11 @@ func (s *sqlStore) ListDives(ctx context.Context, options diveListOptions) ([]di
 		arguments = append(arguments, fmt.Sprintf("%04d-01-01", options.Year), fmt.Sprintf("%04d-12-31", options.Year))
 	}
 	if options.Country != "" {
-		conditions = append(conditions, "COALESCE(dives.country_override,dives.country_code) = ?")
-		arguments = append(arguments, options.Country)
+		codes := countrydata.MatchingCodes(options.Country)
+		conditions = append(conditions, "COALESCE(dives.country_override,dives.country_code) IN ("+strings.TrimSuffix(strings.Repeat("?,", len(codes)), ",")+")")
+		for _, code := range codes {
+			arguments = append(arguments, code)
+		}
 	}
 	if options.TripID != "" {
 		conditions = append(conditions, "dives.trip_id = ?")

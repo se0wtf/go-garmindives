@@ -69,7 +69,18 @@ Garmin needs a targeted sync to update already imported notes.
 Countries have `{code, name_fr, name_en}`. Codes are uppercase country/territory
 codes from the supplied catalog. `FR`, `NC`, and `PF` are distinct destinations.
 Country inputs accept a code or either catalog name, ignoring case/accents.
+The catalog contains one entry per canonical code and requires nonempty French
+and English labels. Deprecated aliases (for example FX/FR or UK/GB) are not
+separate choices. Unambiguous legacy code inputs still resolve to their canonical
+country; historical codes without a labeled replacement are rejected.
 Persist codes; display the requested language's name.
+
+There are two country-choice use cases: `/api/v1/countries` (and setup/countries)
+supplies the worldwide residence selector, while `/api/v1/dives/countries`
+supplies only countries present in stored dives for the dive filter. The latter
+uses effective countries, respects manual overrides, and excludes unknowns. It
+does not inherit a current dive page/year/date filter. Both lists use the same
+bilingual country representation; fetching them performs no provider lookup.
 
 A dive exposes its detected country, optional manual override, effective country,
 and source (`auto`, `manual`, or `unknown`). An override wins without erasing

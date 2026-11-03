@@ -19,6 +19,7 @@ import (
 
 func (s *apiServer) registerTravelRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/countries", s.listCountries)
+	mux.HandleFunc("GET /api/v1/dives/countries", s.listDiveCountries)
 	mux.HandleFunc("GET /api/v1/countries/status", s.countryStatus)
 	mux.HandleFunc("POST /api/v1/countries/retry", s.retryCountries)
 	mux.HandleFunc("GET /api/v1/home-countries", s.listHomeCountries)
@@ -65,9 +66,22 @@ func (s *apiServer) travelError(w http.ResponseWriter, r *http.Request, err erro
 	}
 }
 func (s *apiServer) listCountries(w http.ResponseWriter, r *http.Request) {
+	writeCountryChoices(w, r, countrydata.Catalog)
+}
+
+func (s *apiServer) listDiveCountries(w http.ResponseWriter, r *http.Request) {
+	countries, err := s.store.DiveCountries(r.Context())
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	writeCountryChoices(w, r, countries)
+}
+
+func writeCountryChoices(w http.ResponseWriter, r *http.Request, countries []countrydata.Country) {
 	items := []countrydata.Country{}
 	q := countrydata.NormalizeSearch(r.URL.Query().Get("q"))
-	for _, c := range countrydata.Catalog {
+	for _, c := range countries {
 		if q == "" || strings.Contains(countrydata.NormalizeSearch(c.Code+" "+c.NameFR+" "+c.NameEN), q) {
 			items = append(items, c)
 		}

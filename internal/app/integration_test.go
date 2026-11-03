@@ -259,4 +259,35 @@ func TestPostgresStoreIntegration(t *testing.T) {
 			t.Fatalf("PostgreSQL setup changed existing dive: %v", err)
 		}
 	})
+	t.Run("effective dive country choices", func(t *testing.T) {
+		if _, err := store.db.ExecContext(ctx, `UPDATE dives SET country_code='FR',country_override='EG' WHERE id=42`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.db.ExecContext(ctx, `UPDATE dives SET country_override='FX' WHERE id=43`); err != nil {
+			t.Fatal(err)
+		}
+		choices, err := store.DiveCountries(ctx)
+		if err != nil || len(choices) != 2 || choices[0].Code != "EG" || choices[1].Code != "FR" {
+			t.Fatalf("PostgreSQL country choices: %+v, %v", choices, err)
+		}
+		dives, _, err := store.ListDives(ctx, diveListOptions{Country: "FR", Limit: 10})
+		if err != nil || len(dives) != 1 || dives[0].ID != 43 {
+			t.Fatalf("PostgreSQL canonical country filter: %+v, %v", dives, err)
+		}
+	})
+	t.Run("missing country review", func(t *testing.T) {
+		if err := store.SaveDives(ctx, []DiveRecord{testSQLDive(t, 44)}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.db.ExecContext(ctx, `UPDATE dives SET country_code=NULL,country_override=NULL,country_lookup_key='review-test' WHERE id=44`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.db.ExecContext(ctx, `INSERT INTO country_lookup_cache(lookup_key,latitude,longitude,status,updated_at) VALUES('review-test',10,20,'not_found',1700000000000)`); err != nil {
+			t.Fatal(err)
+		}
+		items, more, err := store.DivesMissingCountry(ctx, missingCountryOptions{Limit: 1, LookupStatus: "not_found"})
+		if err != nil || more || len(items) != 1 || items[0].Dive.ID != 44 || items[0].Lookup.Status != "not_found" || items[0].Lookup.Latitude == nil || *items[0].Lookup.Latitude != 10 {
+			t.Fatalf("PostgreSQL missing-country query: %+v, more=%v, err=%v", items, more, err)
+		}
+	})
 }

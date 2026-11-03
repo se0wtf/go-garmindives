@@ -79,6 +79,10 @@ validates syntax, and saves pending settings. It does not test the target by
 switching the running connection or copy any data. Other YAML properties are
 currently managed by file/ENV/flags, not by this PATCH endpoint.
 
+Every `/api/v1/admin/` route is also private for GET/HEAD. The missing-country
+review list uses this boundary; public country catalogs and ordinary dive reads
+remain available without login after setup.
+
 ## Setup and startup state machine
 
 The HTTP listener exposes documentation, setup status/countries, `/healthz`, and

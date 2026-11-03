@@ -50,6 +50,10 @@ func (s *apiServer) writeTranslatedJSON(w http.ResponseWriter, r *http.Request, 
 		for i := range response.Items {
 			addDive(&response.Items[i])
 		}
+	case *missingCountryListResponse:
+		for i := range response.Items {
+			addDive(&response.Items[i].Dive)
+		}
 	case *diveDetail:
 		addDive(&response.Dive)
 		for i := range response.Media {

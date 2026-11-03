@@ -59,6 +59,7 @@ func newAPIHandler(store *sqlStore, logger *charmLog.Logger) http.Handler {
 	apidocs.RegisterRoutes(mux)
 	server.registerTranslationRoutes(mux)
 	server.registerTravelRoutes(mux)
+	server.registerCountryAdminRoutes(mux)
 	mux.HandleFunc("GET /api/v1/health", server.health)
 	mux.HandleFunc("GET /api/v1/dives", server.listDives)
 	mux.HandleFunc("GET /api/v1/dives/{id}", server.getDive)
@@ -271,6 +272,15 @@ func decodeCursor(value string, destination any) error {
 }
 
 func (s *apiServer) internalError(w http.ResponseWriter, r *http.Request, err error) {
+	// A client that canceled its request no longer needs an error response.
+	// Check request state and error cause so cancellation on a live request is still
+	// reported as a server failure, and timeouts remain visible.
+	if errors.Is(r.Context().Err(), context.Canceled) && errors.Is(err, context.Canceled) {
+		if s.logger != nil {
+			s.logger.Debug("API request canceled", "method", r.Method, "path", r.URL.Path)
+		}
+		return
+	}
 	if s.logger != nil {
 		s.logger.Error("API request failed", "method", r.Method, "path", r.URL.Path, "err", err)
 	}

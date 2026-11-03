@@ -95,7 +95,8 @@ A failed configuration-file save rolls SQL initialization back.
 
 Anonymous users can read configured dives, trips, and media. Every mutation
 (POST/PUT/PATCH/DELETE, including uploads, scans, retries, and regrouping) requires
-an administrator session. Application settings are private even for GET requests.
+an administrator session. Application settings and `/api/v1/admin/` routes are
+private even for GET requests.
 No external authentication service or JWT infrastructure is needed.
 
 - `POST /api/v1/auth/login`: JSON `{"password":"..."}`; sets the session cookie.
@@ -322,6 +323,20 @@ Countries use stable uppercase codes and both names, for example
 code or either name, ignoring case and accents. `GET /api/v1/countries?q=egypte`
 provides the searchable catalog. France (`FR`), New Caledonia (`NC`), and French
 Polynesia (`PF`) are separate destinations.
+Country-choice endpoints return unique canonical codes with French and English
+names. Deprecated aliases and unlabeled historical regions are omitted from the
+choices; unambiguous legacy inputs such as `UK` still resolve to the current code.
+
+Use **`GET /api/v1/dives/countries`** for the frontend's dive-country filter.
+It returns only distinct effective countries in stored dives, with `code`,
+`name_fr`, and `name_en`, sorted by code. Manual overrides replace detections;
+unknown countries are omitted. An empty logbook returns `{"items":[]}`. Optional
+`?q=egypte` searches these choices. The list covers the whole logbook, independently
+of dive pagination/year/date filters, and updates as countries are resolved or edited.
+Canonical filter codes also match historical aliases in existing dive rows.
+Keep `GET /api/v1/countries` for the **worldwide home-country selector**, or
+`GET /api/v1/setup/countries` before initial setup. All three are local reads;
+requesting choices never triggers a geocoding call.
 
 ### Automatic country lookup
 
@@ -363,6 +378,26 @@ Display the returned attribution when showing geocoded data:
 Country overrides survive sync and single-dive refreshes. Cached detected
 countries remain available with outgoing requests disabled. Country names are
 localized locally and require no translation key.
+
+For the admin country-correction page, use
+**`GET /api/v1/admin/dives/missing-country?lookup_status=not_found`** to list dives
+whose lookup returned no result. An administrator session is required. Each row
+contains `dive` (ID, name, date, original GPS, summary) and `lookup` (status, cached
+GPS, optional error code, failed attempts, last check in Unix milliseconds).
+Choose a country from the full `/api/v1/countries` catalog, then correct it with:
+
+```sh
+curl -b admin-cookies.txt -X PATCH http://127.0.0.1:8080/api/v1/dives/DIVE_ID \
+  -H 'Content-Type: application/json' -d '{"country_code":"EG"}'
+```
+
+Corrected dives immediately leave the review list; trip grouping is recalculated
+using residence history. This changes only the selected dive, not every dive at
+the same coordinates. Clearing the override with null restores automatic lookup
+and can put the dive back in the list. The review GET never calls the provider.
+Omit `lookup_status` (or use `all`) to include every dive with no country; other
+filters are `error`, `pending`, and `missing_coordinates`. The default page size
+is 50 (maximum 100); use `next_cursor` to continue with the same status filter.
 
 ### Home-country history
 

@@ -51,6 +51,7 @@ state and ask for login. Logout is POST. Password change requires current/new
 password and logs out every session, including the current one.
 
 All edits, uploads, scans, retries, trip rebuilds, and config reads require login.
+All `/api/v1/admin/` routes require login too, including GET/HEAD review lists.
 There is no username field or role selector. Preserve browser Origin/fetch metadata
 through the proxy. A `403 csrf_rejected` is an origin/deployment problem, not an
 incorrect password. Login attempts can return 429 with `Retry-After` seconds.
@@ -69,6 +70,7 @@ These are functional responsibilities, not a prescribed visual design.
 | Residence settings | List/create/edit/delete inclusive home-country periods |
 | Application settings | Authenticated current/pending DB settings, redacted URI, ENV overrides, restart-required state |
 | Maintenance | Media status/rescan, country and translation progress/retry, trip rebuild |
+| Country correction (admin) | Paginated missing-country dives, lookup reason/GPS, manual country selection from the full catalog |
 
 No API enumerates available years separately. Use meaningful year controls or
 derive available years from fully loaded results; a single list page is not a
@@ -83,6 +85,20 @@ is a case-insensitive substring, not the same accent-folded matching used for
 country/trip names. Combine filters with AND. Trip date filters match overlap;
 dive date filters match individual local dates. An unrated trip does not match
 a rating-bound filter. Zero ratings must remain visible.
+
+Populate the dive-country dropdown from **`GET /api/v1/dives/countries`**, which
+returns `{items: [{code, name_fr, name_en}]}` containing only countries present in
+stored dives. It uses each dive's effective country (manual override first),
+deduplicates countries, omits unknowns, and sorts by code. It covers the entire
+logbook rather than the current page/year/date filter. Optional `q` performs a
+case/accent-insensitive substring search. Empty logbooks return `items: []`.
+Refetch choices after country edits or background detection updates. Use the
+selected code with the existing `/api/v1/dives?country=...` filter; historical
+stored aliases match their canonical code too.
+
+Home-country forms continue using **`GET /api/v1/countries`** for all worldwide
+choices, or `/api/v1/setup/countries` during first setup. Do not use the reduced
+dive-country choices for residence selection.
 
 Collections use `{items: [], next_cursor?: "..."}`. Preserve the cursor exactly;
 keep filters unchanged between pages and reset pagination when a filter changes.
@@ -99,6 +115,36 @@ Dive detail includes all of its own attachments. Trip detail includes all own
 attachments and the first 100 favorite dive attachments; `favorites_next_cursor`
 continues that favorite collection through `/api/v1/media/favorites?trip_id=...`.
 The dedicated owner-media collection endpoints support pagination when preferred.
+
+## Admin country-correction workflow
+
+For dives whose lookups returned no country, fetch
+`GET /api/v1/admin/dives/missing-country?lookup_status=not_found` with the session
+cookie. Anonymous requests receive 401. The response is `{items, next_cursor?}`;
+each item has `dive` (the regular summary, including ID/name/date/entry and exit
+GPS) and `lookup` (status, cached latitude/longitude, optional error_code, attempts,
+and nullable checked_at_ms). Use dive.id for links and corrections.
+
+The default `lookup_status=all` includes every dive still lacking a country. A
+status control can also select `not_found`, `error`, `pending`, or
+`missing_coordinates`. Pending includes active work/retries; avoid presenting it
+as a completed failure. One shared lookup can affect multiple dives, so this
+list is per dive while the status endpoint counts unique positions. Missing
+lookup coordinates and check timestamps are null; original GPS is in dive.
+
+Offer the **worldwide** `/api/v1/countries` catalog for manual country selection,
+then PATCH `/api/v1/dives/{id}` with `{"country_code":"EG"}`. On success, remove
+that row/refetch the queue and invalidate dive/trip/filter-country caches.
+Automatic trips are recalculated when residence/date data permits. Other dives
+sharing that failed lookup remain in the queue until separately corrected.
+Sending country_code null restores automatic detection and can return the dive
+to the list. The list is read-only and does not retry provider calls; the existing
+retry endpoint retries failed/unresolved positions globally, not one selected dive.
+
+Pages default to 50, maximum 100, ordered newest first by the ordinary dive cursor.
+Keep lookup_status unchanged when continuing. This queue is live rather than a
+snapshot; refetch from the beginning after correcting rows. There is no new bulk
+edit endpoint or end-user frontend implementation in this backend repository.
 
 ## Editing semantics
 

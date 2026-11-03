@@ -856,12 +856,60 @@ paths:
       security:
       - adminSession: []
       - adminSessionDevelopment: []
+  /api/v1/dives/countries:
+    get:
+      tags:
+      - Countries
+      - Dives
+      operationId: listDiveCountries
+      summary: List countries present in stored dives for the dive filter
+      description: >-
+        Public after setup. Returns unique effective countries across the entire
+        stored dive logbook, sorted by code. A manual country override replaces
+        the detected country. Unknown or unlabeled countries are omitted. Codes
+        are canonical and each item contains French and English names. Empty
+        logbooks return items as an empty array. This list is independent of dive
+        pagination and other dive-list filters. It is read from SQL without
+        contacting the geocoder. Use GET /api/v1/countries for the worldwide
+        home-country selector, or GET /api/v1/setup/countries before setup.
+      parameters:
+      - name: q
+        in: query
+        schema:
+          type: string
+        description: Optional case/accent-insensitive substring search of code and French/English names.
+      responses:
+        '200':
+          description: Effective country choices from stored dives, without pagination.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CountryList'
+              example:
+                items:
+                - code: EG
+                  name_fr: Égypte
+                  name_en: Egypt
+                - code: PF
+                  name_fr: Polynésie française
+                  name_en: French Polynesia
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          description: Initial setup is incomplete or the configured runtime is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/countries:
     get:
       tags:
       - Countries
       operationId: listCountries
-      summary: List country codes and French/English names
+      summary: List the worldwide country catalog for home-country selection
+      description: >-
+        Returns the complete canonical bilingual country catalog, independently
+        of stored dives. Use GET /api/v1/dives/countries for the dive filter dropdown.
       parameters:
       - name: q
         in: query
@@ -912,6 +960,64 @@ paths:
         '503':
           description: 'Before initial setup: error.code=not_configured. After setup, unavailable services remain
             configured and return a service/database availability error.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/admin/dives/missing-country:
+    get:
+      tags:
+      - Countries
+      operationId: listDivesMissingCountry
+      summary: Review dives with no country for manual correction (administrator only)
+      description: >-
+        Returns one row per dive with no effective country. A lookup shared by
+        multiple dives produces multiple rows. Already detected or manually
+        corrected dives are excluded. By default includes all unresolved dives;
+        use lookup_status=not_found for completed lookups without a result.
+        Results are ordered by local date, start time, and activity ID descending,
+        with the same cursor format as the dive list. The lookup object includes
+        the cached coordinates, sanitized error code, consecutive failure count,
+        and last check timestamp when available. This is a local SQL read; it
+        never retries or calls the geocoder. Choose from GET /api/v1/countries
+        and PATCH /api/v1/dives/{id} with country_code to correct a dive. The dive
+        then leaves this list and automatic trip reconciliation runs. A correction
+        affects that dive only, including when other dives share its coordinates.
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
+      parameters:
+      - name: lookup_status
+        in: query
+        schema:
+          type: string
+          default: all
+          enum: [all, not_found, error, pending, missing_coordinates]
+        description: >-
+          not_found means no provider result; error means failed work; pending
+          includes queued/processing work, retries and results awaiting local
+          reconciliation; missing_coordinates means no usable lookup position.
+      - $ref: '#/components/parameters/PageLimit'
+      - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Dives needing a country; items is an empty array when none match.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MissingCountryList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: Administrator authentication is required or the session expired/revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          description: Setup is incomplete, the runtime is unavailable, or administrator/session SQL cannot be read.
           content:
             application/json:
               schema:
@@ -3249,6 +3355,53 @@ components:
             $ref: '#/components/schemas/Country'
       required:
       - items
+    MissingCountryLookup:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [not_found, error, pending, missing_coordinates]
+        latitude:
+          type: number
+          nullable: true
+          description: Cached lookup position, in degrees; null when no lookup row exists.
+        longitude:
+          type: number
+          nullable: true
+          description: Cached lookup position, in degrees; null when no lookup row exists.
+        error_code:
+          type: string
+          description: Sanitized failure code, omitted when empty. Can also describe a retrying pending job.
+        attempts:
+          type: integer
+          minimum: 0
+          description: Consecutive failed attempts for the shared lookup position, not the number of dives.
+        checked_at_ms:
+          type: integer
+          format: int64
+          nullable: true
+          description: Unix milliseconds of the latest cached lookup result/failure; null before a result exists.
+      required: [status, latitude, longitude, attempts, checked_at_ms]
+    MissingCountryDive:
+      type: object
+      properties:
+        dive:
+          $ref: '#/components/schemas/DiveSummary'
+        lookup:
+          $ref: '#/components/schemas/MissingCountryLookup'
+      required: [dive, lookup]
+      description: Dive summary with name/date/entry and exit GPS; country is unknown and no manual country override exists.
+    MissingCountryList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/MissingCountryDive'
+        next_cursor:
+          type: string
+          description: Omitted on the last page. Keep lookup_status unchanged when continuing.
+      required: [items]
     CountryLookupStatus:
       type: object
       properties:

@@ -147,17 +147,21 @@ func (a *adminAuth) Handler(base http.Handler) http.Handler {
 	mux.Handle("GET /api/v1/config", a.requireAdmin(http.HandlerFunc(a.getConfig)))
 	mux.Handle("PATCH /api/v1/config", a.requireAdmin(http.HandlerFunc(a.patchConfig)))
 	private := a.sessions.LoadAndSave(mux)
-	writes := a.sessions.LoadAndSave(a.requireAdmin(base))
+	protected := a.sessions.LoadAndSave(a.requireAdmin(base))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/v1/auth/") || r.URL.Path == "/api/v1/config" {
 			private.ServeHTTP(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/api/v1/admin/") || r.URL.Path == "/api/v1/admin" {
+			protected.ServeHTTP(w, r)
 			return
 		}
 		switch r.Method {
 		case http.MethodGet, http.MethodHead, http.MethodOptions:
 			base.ServeHTTP(w, r)
 		default:
-			writes.ServeHTTP(w, r)
+			protected.ServeHTTP(w, r)
 		}
 	})
 }

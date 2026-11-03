@@ -153,9 +153,20 @@ and immediately starting serve can therefore prune restored attachment metadata.
 | /readyz 200 | Runtime activated and live SQL ping succeeds |
 | media/status | Indexed photo/video/thumbnail counts and upload limit |
 | countries/status | Active-position queue progress, provider state/attribution |
+| Admin dives/missing-country | Authenticated per-dive review list; lookup_status=not_found selects completed lookups with no result |
 | translations/status | Locale, active pending/ready/failed, cached revisions, blocked reason |
 | Startup scan log | Per-file action plus added/updated/unchanged/removed/skipped/failed totals |
 | Synchronization log | SQL output type/destination, progress and imported/backfilled count |
+| API request canceled (debug) | Both the request context and failed operation were canceled; no error response is attempted for the abandoned request |
+
+Browser navigation, filter changes, fetch cancellation, or a disconnected proxy
+can cancel an HTTP request and its SQL query. These cancellations are logged only
+at debug level. Deadlines, cancellation within a still-live request, and unrelated
+database errors remain error-level failures. Country lookup runs on its own
+application context and releases SQL transactions before waiting for its provider;
+lookup network time does not occupy the SQLite connection. Its SQL updates and
+trip reconciliation can still briefly contend with API reads. The cancellation
+message alone does not establish why the caller disconnected or whether it timed out.
 
 Retry country failures/not_found through admin POST `/api/v1/countries/retry`;
 disabled outgoing lookup returns its disabled state instead of generating calls.

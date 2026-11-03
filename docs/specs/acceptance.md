@@ -108,9 +108,19 @@ newly generated random trip IDs.
 | C23 | Empty automatic untouched / edited / manual / media-bearing groups | Hide only untouched automatic groups without media |
 | C24 | Bilingual/accent-insensitive country and trip-name filters | Codes/French/English country names match; custom English trip name becomes searchable after ready translation |
 | C25 | Trip overlapping date filter and nullable rating | Inclusive overlap; empty dates excluded; null rating excluded by rating bounds; zero accepted |
+| C26 | Fetch setup or configured country choices | Unique canonical codes, nonempty distinct French/English labels; France and United Kingdom searches return one choice each |
+| C27 | Country input FX/UK vs blank/unlabeled historical code | Resolve FX to FR and UK to GB; reject blank or ambiguous unlabeled historical choices |
+| C28 | GET dives/countries with duplicates, unknowns and manual overrides | Return only distinct effective stored destinations, bilingual and sorted; empty logbook yields items: [] |
+| C29 | Use a canonical dive-country choice over historical stored code aliases | Country filter returns matching dives; home-country/catalog endpoints still include worldwide choices |
+| C30 | Anonymous GET/HEAD of admin missing-country review | 401 after setup; normal initialization gate before setup; public catalogs/dive lists unaffected |
+| C31 | Unresolved shared lookup, error, pending and missing GPS | Per-dive review rows with correct status, name/date/GPS/error/check time; status filtering and cursor pagination work |
+| C32 | Set a country on one not_found dive, then clear it | Remove only that dive from review and recalculate eligible trips; other dives at the same coordinates stay unresolved; clearing can restore the row |
 
 Reference evidence: [travel rules](../../internal/app/travel_test.go), [geocoding](../../internal/app/geocoding_test.go),
 [travel integration/pagination](../../internal/app/travel_integration_test.go).
+Country-choice regressions also live in [catalog tests](../../internal/country/catalog_test.go)
+and [country endpoint tests](../../internal/app/countries_api_test.go).
+Admin review coverage is in [country issue tests](../../internal/app/country_issues_test.go).
 
 ## Media and translations
 
@@ -151,6 +161,13 @@ empty arrays, JSON errors, cursor round trips, ties in ordering, all filters, an
 unavailable startup state. Mutations must be tested through the production auth
 wrapper, not only a low-level domain router. Media byte-range tests must read real
 response bytes, not only inspect status codes.
+
+Canceled dive/trip requests must log at debug without attempting an error response
+when both the request and failed operation report cancellation. Preserve error
+logging for timeouts, unrelated failures, and internal cancellation with a live
+caller. Both list endpoints must remain responsive while a country provider call
+is stalled outside a transaction. Reference: [cancellation logging tests](../../internal/app/request_cancellation_test.go)
+and [worker/API concurrency tests](../../internal/app/travel_integration_test.go).
 
 Upgrade fixtures from earlier schemas must keep dives, original FIT, descriptions,
 covers, favorites, trips, residence, and credentials. Exercise rollback and reject

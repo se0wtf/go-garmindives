@@ -221,7 +221,32 @@ otherwise exit pair. A changed key clears prior detected country, never the manu
 override. Create a queue entry only when GPS is valid and no override exists;
 reuse ready/not_found cache results across dives and restarts. Names resolve
 through the local country catalog with lowercase, NFD decomposition and removal
-of combining marks. Do not transliterate arbitrary aliases not in the catalog.
+of combining marks. Build choices from canonicalized region codes, deduplicate
+codes, and discard regions without both French and English labels. This removes
+deprecated-code duplicates and blank historical regions from both country-list
+endpoints. Recognized unambiguous legacy codes resolve to the canonical country;
+do not guess a country for historical codes split into multiple replacements or
+transliterate arbitrary aliases not recognized by the catalog.
+
+The dive-country filter choices query distinct
+`COALESCE(country_override,country_code)` values from all stored dives, map them
+to labeled canonical countries, deduplicate by canonical code, and sort by code.
+Ignore unknown/null/empty values and apply optional normalized `q` substring
+search to code/French/English names. This GET is a local SQL read and must not
+resolve GPS on demand. Country filtering of dives accepts persisted historical
+code aliases for a selected canonical country. The worldwide catalog remains
+independent of dive data for residence forms and first-run setup.
+
+Admin review queries dives with `COALESCE(country_override,country_code,'')=''`,
+left-joining their current country_lookup_key to the cache. Report no key as
+missing_coordinates, not_found/error as those cached states, and other/missing
+cache states as pending. Each row contains the ordinary dive summary and lookup
+coordinates/error/attempts/latest result timestamp. Return one row per dive even
+for shared lookup keys; exclude corrected dives. Filter by optional lookup_status,
+then paginate with the normal descending dive tuple. GET performs no provider
+request or retry. All `/api/v1/admin/` routes must pass session/version checks on
+reads too. Existing country PATCH removes only that dive from review and runs
+normal country/trip reconciliation transactionally.
 
 Nominatim reverse request: `format=jsonv2`, `zoom=5`, `addressdetails=1`,
 `accept-language=en`, lat/lon six decimals; identify the app with User-Agent.

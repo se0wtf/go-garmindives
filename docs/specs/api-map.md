@@ -10,7 +10,7 @@ guides; the interactive Swagger UI is available at `/swagger/` (also `/docs`).
 Public below means available without an administrator session **after setup**,
 unless the route is explicitly a bootstrap/liveness route. All mutations are
 administrator-only except initial setup and login. Auth/session reads anonymous
-state; GET config is administrator-only. HEAD follows GET routing, and common
+state; GET config and all `/api/v1/admin/` routes are administrator-only. HEAD follows GET routing, and common
 OPTIONS returns 204. Cookie auth and CSRF apply as described in
 [configuration/security](configuration-security.md).
 
@@ -18,6 +18,7 @@ OPTIONS returns 204. Cookie auth and CSRF apply as described in
 | --- | --- | --- | --- | --- | --- | --- |
 | GET | `/api/v1/health` | Public | Check database connectivity | — | — | 200, 500, 503 |
 | GET | `/api/v1/dives` | Public | List dives, newest first | — | `limit`, `cursor`, `from`, `to`, `location`, `year`, `country`, `trip_id` | 200, 400, 500, 503 |
+| GET | `/api/v1/dives/countries` | Public | List effective countries present in stored dives for the filter dropdown | — | `q` | 200, 500, 503 |
 | GET | `/api/v1/dives/{id}` | Public | Read a dive with source documents, decoded FIT data, and media | — | — | 200, 400, 404, 500, 503 |
 | PATCH | `/api/v1/dives/{id}` | Admin | Update cover, country override, or trip membership | `application/json` / DivePatch | — | 200, 400, 404, 500, 503, 401, 403 |
 | GET | `/api/v1/dives/{id}/samples` | Public | Read dive profile samples in sample-index order | — | `limit`, `cursor` | 200, 400, 404, 500, 503 |
@@ -34,8 +35,9 @@ OPTIONS returns 204. Cookie auth and CSRF apply as described in
 | GET | `/api/v1/media/status` | Public | Read indexed media totals and configured upload limits | — | — | 200, 500, 503 |
 | GET | `/api/v1/translations/status` | Public | Read English translation progress and configuration | — | — | 200, 500, 503 |
 | POST | `/api/v1/translations/retry` | Admin | Retry failed English translations and resume a blocked worker | — | — | 202, 503, 500, 401, 403 |
-| GET | `/api/v1/countries` | Public | List country codes and French/English names | — | `q` | 200, 400, 404, 500, 503 |
+| GET | `/api/v1/countries` | Public | List the worldwide country catalog for home-country selection | — | `q` | 200, 400, 404, 500, 503 |
 | GET | `/api/v1/countries/status` | Public | Read cached country lookup progress | — | — | 200, 400, 404, 500, 503 |
+| GET | `/api/v1/admin/dives/missing-country` | Admin | Review dives without a country and their lookup details for manual correction | — | `lookup_status`, `limit`, `cursor` | 200, 400, 401, 500, 503 |
 | POST | `/api/v1/countries/retry` | Admin | Retry failed or unresolved country lookups | — | — | 202, 400, 404, 500, 503, 401, 403 |
 | GET | `/api/v1/home-countries` | Public | List dated home-country periods | — | — | 200, 400, 404, 500, 503 |
 | POST | `/api/v1/home-countries` | Admin | Create a home-country period | `application/json` / HomeCountryCreate | — | 201, 400, 404, 500, 409, 503, 401, 403 |

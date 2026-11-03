@@ -195,13 +195,16 @@ func TestCountryWorkerCancellationLeavesAPIResponsive(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("country lookup did not start")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	request := httptest.NewRequest("GET", "/api/v1/dives/1", nil).WithContext(ctx)
-	w := httptest.NewRecorder()
-	newAPIHandler(s, testLogger(t)).ServeHTTP(w, request)
-	if w.Code != 200 {
-		t.Fatalf("country lookup blocked API: %d", w.Code)
+	handler := newAPIHandler(s, testLogger(t))
+	for _, path := range []string{"/api/v1/dives/1", "/api/v1/dives", "/api/v1/trips"} {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		request := httptest.NewRequest("GET", path, nil).WithContext(ctx)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, request)
+		cancel()
+		if w.Code != 200 {
+			t.Fatalf("country lookup blocked %s: status=%d body=%s", path, w.Code, w.Body)
+		}
 	}
 	service.Close()
 	var leases int

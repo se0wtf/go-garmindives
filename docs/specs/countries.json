@@ -40,11 +40,6 @@
     "name_en": "Armenia"
   },
   {
-    "code": "AN",
-    "name_fr": "",
-    "name_en": ""
-  },
-  {
     "code": "AO",
     "name_fr": "Angola",
     "name_en": "Angola"
@@ -175,11 +170,6 @@
     "name_en": "Bhutan"
   },
   {
-    "code": "BU",
-    "name_fr": "Myanmar (Birmanie)",
-    "name_en": "Myanmar (Burma)"
-  },
-  {
     "code": "BV",
     "name_fr": "Île Bouvet",
     "name_en": "Bouvet Island"
@@ -265,24 +255,9 @@
     "name_en": "Clipperton Island"
   },
   {
-    "code": "CQ",
-    "name_fr": "",
-    "name_en": ""
-  },
-  {
     "code": "CR",
     "name_fr": "Costa Rica",
     "name_en": "Costa Rica"
-  },
-  {
-    "code": "CS",
-    "name_fr": "",
-    "name_en": ""
-  },
-  {
-    "code": "CT",
-    "name_fr": "Kiribati",
-    "name_en": "Kiribati"
   },
   {
     "code": "CU",
@@ -315,11 +290,6 @@
     "name_en": "Czechia"
   },
   {
-    "code": "DD",
-    "name_fr": "Allemagne",
-    "name_en": "Germany"
-  },
-  {
     "code": "DE",
     "name_fr": "Allemagne",
     "name_en": "Germany"
@@ -348,11 +318,6 @@
     "code": "DO",
     "name_fr": "République dominicaine",
     "name_en": "Dominican Republic"
-  },
-  {
-    "code": "DY",
-    "name_fr": "Bénin",
-    "name_en": "Benin"
   },
   {
     "code": "DZ",
@@ -430,17 +395,7 @@
     "name_en": "Faroe Islands"
   },
   {
-    "code": "FQ",
-    "name_fr": "",
-    "name_en": ""
-  },
-  {
     "code": "FR",
-    "name_fr": "France",
-    "name_en": "France"
-  },
-  {
-    "code": "FX",
     "name_fr": "France",
     "name_en": "France"
   },
@@ -570,11 +525,6 @@
     "name_en": "Hungary"
   },
   {
-    "code": "HV",
-    "name_fr": "Burkina Faso",
-    "name_en": "Burkina Faso"
-  },
-  {
     "code": "IC",
     "name_fr": "Îles Canaries",
     "name_en": "Canary Islands"
@@ -648,11 +598,6 @@
     "code": "JP",
     "name_fr": "Japon",
     "name_en": "Japan"
-  },
-  {
-    "code": "JT",
-    "name_fr": "Îles mineures éloignées des États-Unis",
-    "name_en": "U.S. Outlying Islands"
   },
   {
     "code": "KE",
@@ -800,11 +745,6 @@
     "name_en": "Marshall Islands"
   },
   {
-    "code": "MI",
-    "name_fr": "Îles mineures éloignées des États-Unis",
-    "name_en": "U.S. Outlying Islands"
-  },
-  {
     "code": "MK",
     "name_fr": "Macédoine",
     "name_en": "Macedonia"
@@ -910,11 +850,6 @@
     "name_en": "Nigeria"
   },
   {
-    "code": "NH",
-    "name_fr": "Vanuatu",
-    "name_en": "Vanuatu"
-  },
-  {
     "code": "NI",
     "name_fr": "Nicaragua",
     "name_en": "Nicaragua"
@@ -935,19 +870,9 @@
     "name_en": "Nepal"
   },
   {
-    "code": "NQ",
-    "name_fr": "Antarctique",
-    "name_en": "Antarctica"
-  },
-  {
     "code": "NR",
     "name_fr": "Nauru",
     "name_en": "Nauru"
-  },
-  {
-    "code": "NT",
-    "name_fr": "",
-    "name_en": ""
   },
   {
     "code": "NU",
@@ -968,11 +893,6 @@
     "code": "PA",
     "name_fr": "Panama",
     "name_en": "Panama"
-  },
-  {
-    "code": "PC",
-    "name_fr": "",
-    "name_en": ""
   },
   {
     "code": "PE",
@@ -1030,11 +950,6 @@
     "name_en": "Portugal"
   },
   {
-    "code": "PU",
-    "name_fr": "Îles mineures éloignées des États-Unis",
-    "name_en": "U.S. Outlying Islands"
-  },
-  {
     "code": "PW",
     "name_fr": "Palaos",
     "name_en": "Palau"
@@ -1045,11 +960,6 @@
     "name_en": "Paraguay"
   },
   {
-    "code": "PZ",
-    "name_fr": "Panama",
-    "name_en": "Panama"
-  },
-  {
     "code": "QA",
     "name_fr": "Qatar",
     "name_en": "Qatar"
@@ -1058,11 +968,6 @@
     "code": "RE",
     "name_fr": "La Réunion",
     "name_en": "Réunion"
-  },
-  {
-    "code": "RH",
-    "name_fr": "Zimbabwe",
-    "name_en": "Zimbabwe"
   },
   {
     "code": "RO",
@@ -1170,11 +1075,6 @@
     "name_en": "São Tomé \u0026 Príncipe"
   },
   {
-    "code": "SU",
-    "name_fr": "",
-    "name_en": ""
-  },
-  {
     "code": "SV",
     "name_fr": "Salvador",
     "name_en": "El Salvador"
@@ -1255,11 +1155,6 @@
     "name_en": "Tonga"
   },
   {
-    "code": "TP",
-    "name_fr": "Timor oriental",
-    "name_en": "Timor-Leste"
-  },
-  {
     "code": "TR",
     "name_fr": "Turquie",
     "name_en": "Turkey"
@@ -1293,11 +1188,6 @@
     "code": "UG",
     "name_fr": "Ouganda",
     "name_en": "Uganda"
-  },
-  {
-    "code": "UK",
-    "name_fr": "Royaume-Uni",
-    "name_en": "United Kingdom"
   },
   {
     "code": "UM",
@@ -1335,11 +1225,6 @@
     "name_en": "St. Vincent \u0026 Grenadines"
   },
   {
-    "code": "VD",
-    "name_fr": "Vietnam",
-    "name_en": "Vietnam"
-  },
-  {
     "code": "VE",
     "name_fr": "Venezuela",
     "name_en": "Venezuela"
@@ -1370,11 +1255,6 @@
     "name_en": "Wallis \u0026 Futuna"
   },
   {
-    "code": "WK",
-    "name_fr": "Îles mineures éloignées des États-Unis",
-    "name_en": "U.S. Outlying Islands"
-  },
-  {
     "code": "WS",
     "name_fr": "Samoa",
     "name_en": "Samoa"
@@ -1383,11 +1263,6 @@
     "code": "XK",
     "name_fr": "Kosovo",
     "name_en": "Kosovo"
-  },
-  {
-    "code": "YD",
-    "name_fr": "Yémen",
-    "name_en": "Yemen"
   },
   {
     "code": "YE",
@@ -1400,11 +1275,6 @@
     "name_en": "Mayotte"
   },
   {
-    "code": "YU",
-    "name_fr": "",
-    "name_en": ""
-  },
-  {
     "code": "ZA",
     "name_fr": "Afrique du Sud",
     "name_en": "South Africa"
@@ -1413,11 +1283,6 @@
     "code": "ZM",
     "name_fr": "Zambie",
     "name_en": "Zambia"
-  },
-  {
-    "code": "ZR",
-    "name_fr": "Congo-Kinshasa",
-    "name_en": "Congo - Kinshasa"
   },
   {
     "code": "ZW",
