@@ -93,9 +93,37 @@ type diveListOptions struct {
 	Year      int
 	Country   string
 	TripID    string
+	Ratings   []float64
 	AfterDate string
 	AfterTime string
 	AfterID   int64
+}
+
+// DiveYears lists years from validated local dates across the whole logbook,
+// independently of the current dive-list filters and pagination.
+func (s *sqlStore) DiveYears(ctx context.Context) ([]int, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT SUBSTR(local_date,1,4) AS dive_year
+		FROM dives WHERE local_date<>'' ORDER BY dive_year DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("list dive years: %w", err)
+	}
+	defer rows.Close()
+	years := []int{}
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return nil, fmt.Errorf("read dive year: %w", err)
+		}
+		year, err := strconv.Atoi(raw)
+		if len(raw) != 4 || err != nil || year < 1 || year > 9999 {
+			continue
+		}
+		years = append(years, year)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list dive years: %w", err)
+	}
+	return years, nil
 }
 
 func (s *sqlStore) ListDives(ctx context.Context, options diveListOptions) ([]diveSummary, bool, error) {
@@ -115,6 +143,12 @@ func (s *sqlStore) ListDives(ctx context.Context, options diveListOptions) ([]di
 	if options.TripID != "" {
 		conditions = append(conditions, "dives.trip_id = ?")
 		arguments = append(arguments, options.TripID)
+	}
+	if len(options.Ratings) > 0 {
+		conditions = append(conditions, "dives.rating IN ("+strings.TrimSuffix(strings.Repeat("?,", len(options.Ratings)), ",")+")")
+		for _, rating := range options.Ratings {
+			arguments = append(arguments, rating)
+		}
 	}
 	if options.From != "" {
 		conditions = append(conditions, "dives.local_date >= ?")

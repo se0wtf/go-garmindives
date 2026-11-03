@@ -17,7 +17,8 @@ OPTIONS returns 204. Cookie auth and CSRF apply as described in
 | Method | Path | Access | Purpose | Request body | Query parameters | Response statuses |
 | --- | --- | --- | --- | --- | --- | --- |
 | GET | `/api/v1/health` | Public | Check database connectivity | — | — | 200, 500, 503 |
-| GET | `/api/v1/dives` | Public | List dives, newest first | — | `limit`, `cursor`, `from`, `to`, `location`, `year`, `country`, `trip_id` | 200, 400, 500, 503 |
+| GET | `/api/v1/dives` | Public | List dives, newest first | — | `limit`, `cursor`, `from`, `to`, `location`, `year`, `country`, `trip_id`, `ratings` | 200, 400, 500, 503 |
+| GET | `/api/v1/dives/years` | Public | List distinct years present in stored dives, newest first | — | — | 200, 500, 503 |
 | GET | `/api/v1/dives/countries` | Public | List effective countries present in stored dives for the filter dropdown | — | `q` | 200, 500, 503 |
 | GET | `/api/v1/dives/{id}` | Public | Read a dive with source documents, decoded FIT data, and media | — | — | 200, 400, 404, 500, 503 |
 | PATCH | `/api/v1/dives/{id}` | Admin | Update cover, country override, or trip membership | `application/json` / DivePatch | — | 200, 400, 404, 500, 503, 401, 403 |
@@ -44,13 +45,13 @@ OPTIONS returns 204. Cookie auth and CSRF apply as described in
 | GET | `/api/v1/home-countries/{homeID}` | Public | Read a home-country period | — | — | 200, 400, 404, 500, 503 |
 | PATCH | `/api/v1/home-countries/{homeID}` | Admin | Update a home-country period | `application/json` / HomeCountryPatch | — | 200, 400, 404, 500, 409, 503, 401, 403 |
 | DELETE | `/api/v1/home-countries/{homeID}` | Admin | Delete a home-country period | — | — | 204, 400, 404, 500, 503, 401, 403 |
-| GET | `/api/v1/trips` | Public | List and filter dive trips | — | `limit`, `cursor`, `year`, `country`, `name`, `from`, `to`, `min_rating`, `max_rating` | 200, 400, 404, 500, 503 |
+| GET | `/api/v1/trips` | Public | List and filter dive trips | — | `limit`, `cursor`, `year`, `country`, `name`, `from`, `to`, `ratings` | 200, 400, 404, 500, 503 |
 | POST | `/api/v1/trips` | Admin | Create a trip | `application/json` / TripCreate | — | 201, 400, 404, 500, 503, 401, 403 |
 | POST | `/api/v1/trips/rebuild` | Admin | Recalculate automatic trip assignments | — | — | 200, 400, 404, 500, 503, 401, 403 |
 | GET | `/api/v1/trips/{tripID}` | Public | Read trip metadata, dive IDs, own media, and favorite dive media | — | — | 200, 400, 404, 500, 503 |
 | PATCH | `/api/v1/trips/{tripID}` | Admin | Update trip metadata or replace dive membership | `application/json` / TripPatch | — | 200, 400, 404, 500, 503, 401, 403 |
 | DELETE | `/api/v1/trips/{tripID}` | Admin | Delete a trip while retaining dives and original media | — | — | 204, 400, 404, 500, 503, 401, 403 |
-| GET | `/api/v1/trips/{tripID}/dives` | Public | List linked dives using normal dive filters and pagination | — | `limit`, `cursor`, `from`, `to`, `location`, `year`, `country` | 200, 400, 404, 500, 503 |
+| GET | `/api/v1/trips/{tripID}/dives` | Public | List linked dives using normal dive filters and pagination | — | `limit`, `cursor`, `from`, `to`, `location`, `year`, `country`, `ratings` | 200, 400, 404, 500, 503 |
 | PUT | `/api/v1/trips/{tripID}/dives/{id}` | Admin | Manually assign a dive to this trip | — | — | 204, 400, 404, 500, 503, 401, 403 |
 | DELETE | `/api/v1/trips/{tripID}/dives/{id}` | Admin | Remove a dive and persist its automatic-trip exclusion | — | — | 204, 400, 404, 500, 503, 401, 403 |
 | GET | `/api/v1/media/favorites` | Public | List favorite photos/videos across dives | — | `limit`, `cursor`, `trip_id` | 200, 400, 404, 500, 503 |
@@ -125,5 +126,5 @@ alone cannot express:
 Garmin synchronization and single-dive refresh are CLI commands. There is no
 public endpoint to delete a dive, change its imported notes/rating/name/date/GPS,
 download a dedicated FIT binary, move media between owners, undelete a trip,
-enumerate available years, or trigger server restarts. Any new frontend control
+or trigger server restarts. Any new frontend control
 requiring these behaviors needs an explicit backend feature, not a guessed route.

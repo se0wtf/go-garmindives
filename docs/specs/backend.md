@@ -213,6 +213,40 @@ Text outside a recognized section is not parsed but remains in the raw source.
 Parse notes and description separately, then fall back by section presence,
 not by whether its parsed value is nonempty. Migration 8 backfills locally.
 
+## Dive year choices
+
+`GET /api/v1/dives/years` reads distinct four-digit year prefixes from stored
+validated local_date values, descending, then returns them as integers 1–9999.
+Omit missing/unparseable/zero years. The response is `{items: [...]}`, with an
+empty array for no choices. Use the local date as stored, without UTC conversion,
+and do not synthesize intermediate years. Read across the whole logbook,
+independently of dive pagination and all other filters; no provider calls or
+background jobs are needed. The route is public after the normal setup/readiness
+gate. Newly imported/updated dates become visible on the next read.
+
+## Rating selection filters
+
+The ordinary dive list, trip dive list, and trip list accept an optional `ratings` selection.
+Split comma-separated values across all occurrences of that query parameter,
+trim whitespace, reject empty/malformed/negative/nonfinite numbers and more than
+100 supplied values, and deduplicate numerically. An omitted parameter adds no
+rating condition. Bind the selected scores in `dives.rating IN (...)`, before
+cursor pagination and together with the other AND predicates. This implements
+exact OR matching, excludes SQL NULL ratings, preserves zero/decimal values,
+and never normalizes by rating_max. Keep the ordinary descending date/time/ID
+ordering. Invalid selections return 400 invalid_request. No migration or
+provider request is required.
+
+For `/api/v1/trips`, apply the same parsed selection to `dive_trips.rating`.
+This is the independently set trip rating, not a member-dive rating or average.
+Trip scores remain 0–5, so a valid selection above 5 simply matches no trip at
+that score. Reject the removed min_rating/max_rating query parameters with
+400 invalid_request and a message directing callers to ratings; check parameter
+presence even when values are empty or ratings is also supplied. No bound
+parsing or SQL range predicates remain.
+Apply every condition before trip cursor/limit handling, retaining descending
+start_date/ID ordering and the existing visibility rules for deleted/empty trips.
+
 ## Country enrichment and trip reconciliation
 
 Country keys are `country-v1:<latitude fixed to 6 decimals>,<longitude fixed to 6 decimals>`.

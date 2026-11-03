@@ -236,7 +236,7 @@ func TestTripCRUDOverridesManualMembershipAndFavorites(t *testing.T) {
 	if travelSummary(t, s, 1).TripID == nil {
 		t.Fatal("automatic assignment could not be restored")
 	}
-	for _, filter := range []string{"name=cruise", "name=Croisiere", "year=2025", "country=Egypt", "min_rating=0&max_rating=0", "from=2025-12-25&to=2026-01-02"} {
+	for _, filter := range []string{"name=cruise", "name=Croisiere", "year=2025", "country=Egypt", "ratings=0", "from=2025-12-25&to=2026-01-02"} {
 		list := travelRequest[tripListResponse](t, h, "GET", "/api/v1/trips?"+filter, nil, 200)
 		found := false
 		for _, item := range list.Items {
@@ -249,7 +249,7 @@ func TestTripCRUDOverridesManualMembershipAndFavorites(t *testing.T) {
 		}
 	}
 	travelRequest[httpx.ErrorResponse](t, h, "PATCH", "/api/v1/trips/"+tripID, map[string]int{"rating": 6}, 400)
-	travelRequest[httpx.ErrorResponse](t, h, "GET", "/api/v1/trips?min_rating=NaN", nil, 400)
+	travelRequest[httpx.ErrorResponse](t, h, "GET", "/api/v1/trips?ratings=NaN", nil, 400)
 	travelRequest[map[string]any](t, h, "DELETE", "/api/v1/trips/"+tripID, nil, 204)
 	travelRequest[httpx.ErrorResponse](t, h, "GET", "/api/v1/trips/"+tripID, nil, 404)
 	if d := travelSummary(t, s, 2); d.TripID != nil || d.TripAssignment != "excluded" {

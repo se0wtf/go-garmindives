@@ -20,6 +20,12 @@ empty local date and `year: null`. Do not convert a date-only value through the
 browser's UTC timezone and accidentally move a dive to the previous day/year.
 Date filter bounds and residence intervals are inclusive.
 
+Year choices come only from stored dives: `/api/v1/dives/years` returns distinct
+numeric years newest first, based on dive local dates across the entire logbook.
+Missing dates contribute no choice, and gaps between years remain gaps. The list
+is independent of active filters and pagination and updates as imports change
+stored dive dates. Use a selected choice with the existing `year` dive filter.
+
 | Measurement | API unit |
 | --- | --- |
 | Depth / next-stop depth | metres |
@@ -55,6 +61,12 @@ appear in any order. `Commentaires` is accepted. Decimal comma is accepted.
 `N:4` leaves `rating_max` null; never assume five or normalize the score silently.
 Malformed ratings are null; zero is valid; no highlights is an empty array.
 Ordinary unlabeled prose is retained as raw text, not promoted to `comment`.
+
+Dive lists can filter by one or more exact stored scores using `ratings=4,5`.
+Selected scores match with OR, and the rating filter intersects all other filters.
+Unrated dives are excluded only when a rating filter is supplied; zero and decimal
+scores are valid. Scores keep their imported scale: 8/10 matches rating 8, not 4.
+Trip dive lists expose the same filter, and results remain newest first.
 
 Legacy `notes` takes precedence separately for each explicitly present section;
 missing sections fall back to `description`. An explicitly empty or invalid
@@ -145,6 +157,13 @@ trip requires an initial year and country even when `dive_ids` is supplied.
 | `price` | Free text describing approximate per-person cost, without currency arithmetic |
 | `cover_media_id`, `cover_photo` | Optional photo owned by this trip |
 | `media` / `favorite_dive_media` | Independent attachments / selected attachments of linked dives |
+
+Trip lists support the same exact rating selection as dive lists:
+`/api/v1/trips?ratings=4,5` selects trips whose own rating is 4 or 5, excluding
+unrated and 4.5-rated trips. Zero and decimals are valid selections. Omit the
+selection to include all ratings/unrated trips. Other trip filters intersect
+the selection. Trip ratings
+remain independent of member-dive ratings, and ordering stays newest first.
 
 `name`, `year`, `country_code` null in PATCH removes the respective override.
 `name_en` is only valid with a custom name. Changing the custom French name clears

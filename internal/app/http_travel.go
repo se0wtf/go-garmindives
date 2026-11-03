@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -271,6 +270,11 @@ type tripDetail struct {
 }
 
 func (s *apiServer) listTrips(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	if query.Has("min_rating") || query.Has("max_rating") {
+		httpx.WriteAPIError(w, http.StatusBadRequest, "invalid_request", "min_rating and max_rating are no longer supported; use ratings (for example, ratings=4,5)")
+		return
+	}
 	limit, err := pageLimit(r, 50, 100)
 	if err != nil {
 		httpx.WriteAPIError(w, 400, "invalid_request", err.Error())
@@ -278,6 +282,17 @@ func (s *apiServer) listTrips(w http.ResponseWriter, r *http.Request) {
 	}
 	where := []string{`deleted=0 AND (automatic=0 OR edited=1 OR EXISTS(SELECT 1 FROM dives WHERE dives.trip_id=dive_trips.id) OR EXISTS(SELECT 1 FROM trip_media WHERE trip_media.trip_id=dive_trips.id))`}
 	args := []any{}
+	ratings, err := parseRatings(query["ratings"])
+	if err != nil {
+		httpx.WriteAPIError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if len(ratings) > 0 {
+		where = append(where, "rating IN ("+strings.TrimSuffix(strings.Repeat("?,", len(ratings)), ",")+")")
+		for _, rating := range ratings {
+			args = append(args, rating)
+		}
+	}
 	if q := r.URL.Query().Get("name"); q != "" {
 		where = append(where, `search_name LIKE ? ESCAPE '\'`)
 		args = append(args, "%"+escapeLikePattern(countrydata.NormalizeSearch(q))+"%")
@@ -312,26 +327,6 @@ func (s *apiServer) listTrips(w http.ResponseWriter, r *http.Request) {
 	if to != "" {
 		where = append(where, "start_date<=? AND start_date<>''")
 		args = append(args, to)
-	}
-	var minRating, maxRating *float64
-	for _, field := range []struct {
-		name, operator string
-		destination    **float64
-	}{{"min_rating", ">=", &minRating}, {"max_rating", "<=", &maxRating}} {
-		if raw := r.URL.Query().Get(field.name); raw != "" {
-			rating, err := strconv.ParseFloat(raw, 64)
-			if err != nil || math.IsNaN(rating) || math.IsInf(rating, 0) || rating < 0 || rating > 5 {
-				httpx.WriteAPIError(w, 400, "invalid_request", field.name+" must be 0 to 5")
-				return
-			}
-			*field.destination = &rating
-			where = append(where, "rating"+field.operator+"?")
-			args = append(args, rating)
-		}
-	}
-	if minRating != nil && maxRating != nil && *minRating > *maxRating {
-		httpx.WriteAPIError(w, 400, "invalid_request", "min_rating must not exceed max_rating")
-		return
 	}
 	if raw := r.URL.Query().Get("cursor"); raw != "" {
 		var cursor tripCursor

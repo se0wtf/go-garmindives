@@ -62,6 +62,7 @@ func newAPIHandler(store *sqlStore, logger *charmLog.Logger) http.Handler {
 	server.registerCountryAdminRoutes(mux)
 	mux.HandleFunc("GET /api/v1/health", server.health)
 	mux.HandleFunc("GET /api/v1/dives", server.listDives)
+	mux.HandleFunc("GET /api/v1/dives/years", server.listDiveYears)
 	mux.HandleFunc("GET /api/v1/dives/{id}", server.getDive)
 	mux.HandleFunc("PATCH /api/v1/dives/{id}", server.patchDive)
 	mux.HandleFunc("GET /api/v1/dives/{id}/samples", server.listSamples)
@@ -105,6 +106,11 @@ func (s *apiServer) listDives(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	options := diveListOptions{Limit: limit, From: from, To: to, Location: strings.TrimSpace(r.URL.Query().Get("location"))}
+	options.Ratings, err = parseRatings(r.URL.Query()["ratings"])
+	if err != nil {
+		httpx.WriteAPIError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
 	if raw := r.URL.Query().Get("year"); raw != "" {
 		year, err := strconv.Atoi(raw)
 		if err != nil || year < 1 || year > 9999 {

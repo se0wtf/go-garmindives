@@ -107,7 +107,7 @@ newly generated random trip IDs.
 | C22 | Delete trip | Hide it and its asset routes, preserve originals/rows/dives, exclude current members |
 | C23 | Empty automatic untouched / edited / manual / media-bearing groups | Hide only untouched automatic groups without media |
 | C24 | Bilingual/accent-insensitive country and trip-name filters | Codes/French/English country names match; custom English trip name becomes searchable after ready translation |
-| C25 | Trip overlapping date filter and nullable rating | Inclusive overlap; empty dates excluded; null rating excluded by rating bounds; zero accepted |
+| C25 | Trip overlapping date filter and nullable rating | Inclusive overlap; empty dates excluded; null rating excluded by rating selections; zero accepted |
 | C26 | Fetch setup or configured country choices | Unique canonical codes, nonempty distinct French/English labels; France and United Kingdom searches return one choice each |
 | C27 | Country input FX/UK vs blank/unlabeled historical code | Resolve FX to FR and UK to GB; reject blank or ambiguous unlabeled historical choices |
 | C28 | GET dives/countries with duplicates, unknowns and manual overrides | Return only distinct effective stored destinations, bilingual and sorted; empty logbook yields items: [] |
@@ -155,12 +155,43 @@ Reference evidence: [media](../../internal/app/media_test.go), [descriptions](..
 
 ## API and migration verification
 
+`GET /api/v1/dives/years` is gated before setup and public afterward. An empty
+logbook returns items: []; multiple dives in one year produce a single numeric
+choice, ordered newest first. Include years beyond the first dive-list page,
+leave gaps rather than inventing years, omit missing dates/invalid years, and use
+local dates at Dec/Jan timezone boundaries. Active filters/pagination must not
+narrow the choice list. Every offered year must work with the existing dive
+year filter, and new imports must update choices on the next read. Reference:
+[year-choice API tests](../../internal/app/dive_years_test.go) and
+[PostgreSQL integration](../../internal/app/integration_test.go).
+
 Verify all operations in [the API map](api-map.md), including auth/status/config,
 against [OpenAPI](../openapi.yaml). Validate response field omission/nullability,
 empty arrays, JSON errors, cursor round trips, ties in ordering, all filters, and
 unavailable startup state. Mutations must be tested through the production auth
 wrapper, not only a low-level domain router. Media byte-range tests must read real
 response bytes, not only inspect status codes.
+
+For dive rating selections, `ratings=4,5` includes exact 4 and 5 scores and
+excludes 4.5/unrated dives; `ratings=4.5` includes that decimal, and `ratings=0`
+includes zero without matching null. Omission leaves all scores/unrated dives
+eligible. Verify 8/10 matches 8 without normalization, duplicates/repeated
+parameters, invalid/empty/negative/nonfinite values and the 100-value limit.
+Combine selections with year/country/date/location/trip filters and paginate
+without losing or duplicating matches. Trip dive lists apply the same selection
+and pagination within their membership. Reference: [rating filter tests](../../internal/app/dive_rating_filters_test.go)
+and [PostgreSQL integration](../../internal/app/integration_test.go).
+
+Trip lists use the same exact `ratings` selection, validation and pagination.
+Verify 4/5 versus 4.5, zero versus null, repeated values, empty/invalid/nonfinite
+inputs and the 100-value limit. The matched score is the trip's own rating:
+a trip with highly rated member dives remains excluded when its own rating is
+missing or unselected. Preserve all existing visibility rules and intersect
+name/year/country/date filters. Removed min_rating/max_rating parameters return
+400 invalid_request with guidance to use ratings, even when empty or combined
+with a selection. Scores above 5 are valid query selections but match no trip.
+Reference: [trip rating filter tests](../../internal/app/trip_rating_filters_test.go),
+also executed against PostgreSQL by the integration suite.
 
 Canceled dive/trip requests must log at debug without attempting an error response
 when both the request and failed operation report cancellation. Preserve error

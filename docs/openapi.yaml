@@ -119,6 +119,7 @@ paths:
       - $ref: '#/components/parameters/Year'
       - $ref: '#/components/parameters/CountryFilter'
       - $ref: '#/components/parameters/TripFilter'
+      - $ref: '#/components/parameters/Ratings'
       responses:
         '200':
           description: A page of dive summaries including cover_photo URLs. next_cursor is omitted on the last page.
@@ -856,6 +857,39 @@ paths:
       security:
       - adminSession: []
       - adminSessionDevelopment: []
+  /api/v1/dives/years:
+    get:
+      tags:
+      - Dives
+      operationId: listDiveYears
+      summary: List years present in stored dives for the year filter
+      description: >-
+        Public after setup. Returns distinct numeric years from dive local_date,
+        newest first, across the entire stored logbook. Missing dates or years
+        outside 1 through 9999 are omitted. Uses the dive's local calendar date,
+        without converting start_time to UTC. An empty logbook returns items as
+        an empty array. This list has no pagination or query filters and is
+        independent of active dive-list filters. It is a local SQL read, with
+        no Garmin request, and reflects newly imported dives on the next read.
+        Use a selected year with GET /api/v1/dives?year=2025; it can be combined
+        with country, ratings and the other existing dive filters.
+      responses:
+        '200':
+          description: Complete list of dive years, distinct and newest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiveYears'
+              example:
+                items: [2026, 2025, 2023]
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          description: Initial setup is incomplete or the configured runtime is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/dives/countries:
     get:
       tags:
@@ -1272,6 +1306,12 @@ paths:
       - Trips
       operationId: listTrips
       summary: List and filter dive trips
+      description: >-
+        Rating filters use the trip's own optional score, independently of its
+        member dives. Use ratings=4,5 for exact 4 OR 5 selection. Selections
+        combine with all other filters using AND. Results retain the usual
+        descending start_date/ID order. Removed min_rating and max_rating
+        parameters return 400 invalid_request; use ratings instead.
       parameters:
       - $ref: '#/components/parameters/PageLimit'
       - $ref: '#/components/parameters/Cursor'
@@ -1293,18 +1333,7 @@ paths:
         schema:
           type: string
           format: date
-      - name: min_rating
-        in: query
-        schema:
-          type: number
-          minimum: 0
-          maximum: 5
-      - name: max_rating
-        in: query
-        schema:
-          type: number
-          minimum: 0
-          maximum: 5
+      - $ref: '#/components/parameters/Ratings'
       responses:
         '200':
           description: Success.
@@ -1564,6 +1593,7 @@ paths:
           type: string
       - $ref: '#/components/parameters/Year'
       - $ref: '#/components/parameters/CountryFilter'
+      - $ref: '#/components/parameters/Ratings'
       responses:
         '200':
           description: Success.
@@ -2582,6 +2612,34 @@ components:
       in: query
       schema:
         type: string
+    Ratings:
+      name: ratings
+      in: query
+      style: form
+      explode: false
+      description: >-
+        Exact stored dive or trip ratings to include (OR), for example ratings=4,5.
+        Omit to include rated and unrated items. A supplied filter excludes
+        unrated items and combines with every other filter using AND. Decimal
+        scores use a dot (ratings=4.5); commas separate scores. Zero is valid.
+        Trip scores are 0 through 5; selecting a score above 5 cannot match a trip.
+        Dive scores can use other scales; compare the raw rating without
+        normalizing rating_max: 8/10 matches 8, not 4. Trip filtering uses the
+        trip's own score, without averaging member dives. Duplicates are ignored;
+        repeated ratings query parameters are
+        also accepted, with at most 100 supplied values in total. Empty values,
+        negative scores, NaN, infinity, malformed numbers and oversized lists
+        return 400 invalid_request. Results remain newest first; keep this
+        filter unchanged while continuing with next_cursor.
+      schema:
+        type: array
+        minItems: 1
+        maxItems: 100
+        items:
+          type: number
+          format: double
+          minimum: 0
+      example: [4, 5]
     ActivityID:
       name: id
       in: path
@@ -3346,6 +3404,19 @@ components:
       - code
       - name_fr
       - name_en
+    DiveYears:
+      type: object
+      properties:
+        items:
+          type: array
+          uniqueItems: true
+          description: Years present in dive local dates, descending; empty array when none exist.
+          items:
+            type: integer
+            minimum: 1
+            maximum: 9999
+      required:
+      - items
     CountryList:
       type: object
       properties:

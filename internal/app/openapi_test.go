@@ -169,7 +169,7 @@ func TestOpenAPISchemasMatchResponseFields(t *testing.T) {
 	for name, value := range map[string]any{
 		"DiveSummary": diveSummary{}, "DiveDetail": diveDetail{}, "DiveAlert": diveAlertAPIResponse{},
 		"RecordMetadata": recordMetadata{}, "DiveSample": diveSampleAPIResponse{},
-		"DiveList": diveListResponse{}, "SampleList": sampleListResponse{},
+		"DiveList": diveListResponse{}, "DiveYears": diveYearsResponse{}, "SampleList": sampleListResponse{},
 		"MediaItem": mediaItem{}, "MediaList": mediaListResponse{}, "MediaScanResult": mediaScanResult{},
 		"FITDocument": fitdata.Document{}, "FITFile": fitdata.File{}, "FITSequence": fitdata.Sequence{},
 		"FITMessage": fitdata.Message{}, "FITField": fitdata.Field{}, "ErrorResponse": httpx.ErrorResponse{},

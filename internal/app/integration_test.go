@@ -290,4 +290,53 @@ func TestPostgresStoreIntegration(t *testing.T) {
 			t.Fatalf("PostgreSQL missing-country query: %+v, more=%v, err=%v", items, more, err)
 		}
 	})
+	t.Run("dive rating filters", func(t *testing.T) {
+		if _, err := store.db.ExecContext(ctx, `UPDATE dives SET rating=CASE WHEN id=42 THEN 4 WHEN id=43 THEN 5 ELSE NULL END`); err != nil {
+			t.Fatal(err)
+		}
+		for _, tc := range []struct {
+			ratings []float64
+			ids     []int64
+		}{
+			{[]float64{4, 5}, []int64{43, 42}},
+			{[]float64{4}, []int64{42}},
+			{[]float64{4.5}, nil},
+			{[]float64{0}, nil},
+		} {
+			items, more, err := store.ListDives(ctx, diveListOptions{Limit: 10, Ratings: tc.ratings})
+			var ids []int64
+			for _, item := range items {
+				ids = append(ids, item.ID)
+			}
+			if err != nil || more || !equalInt64s(ids, tc.ids) {
+				t.Fatalf("PostgreSQL ratings %v: IDs=%v, more=%v, err=%v", tc.ratings, ids, more, err)
+			}
+		}
+		if _, err := store.db.ExecContext(ctx, `UPDATE dives SET rating=0 WHERE id=44`); err != nil {
+			t.Fatal(err)
+		}
+		items, _, err := store.ListDives(ctx, diveListOptions{Limit: 10, Ratings: []float64{0}})
+		if err != nil || len(items) != 1 || items[0].ID != 44 {
+			t.Fatalf("PostgreSQL zero rating: %+v, %v", items, err)
+		}
+	})
+	t.Run("dive year choices", func(t *testing.T) {
+		if _, err := store.db.ExecContext(ctx, `UPDATE dives SET local_date=CASE WHEN id=43 THEN '2026-01-01' ELSE '2025-12-31' END`); err != nil {
+			t.Fatal(err)
+		}
+		years, err := store.DiveYears(ctx)
+		if err != nil || !reflect.DeepEqual(years, []int{2026, 2025}) {
+			t.Fatalf("PostgreSQL year choices: %v, %v", years, err)
+		}
+		if _, err := store.db.ExecContext(ctx, `UPDATE dives SET local_date='' WHERE id<>43`); err != nil {
+			t.Fatal(err)
+		}
+		years, err = store.DiveYears(ctx)
+		if err != nil || !reflect.DeepEqual(years, []int{2026}) {
+			t.Fatalf("PostgreSQL year choices included missing dates: %v, %v", years, err)
+		}
+	})
+	t.Run("trip rating filters", func(t *testing.T) {
+		exerciseTripRatingFilters(t, store)
+	})
 }

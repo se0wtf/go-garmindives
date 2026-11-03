@@ -318,6 +318,18 @@ curl 'http://127.0.0.1:8080/api/v1/dives?year=2025&country=Egypt'
 curl 'http://127.0.0.1:8080/api/v1/dives?country=Egypte'
 ```
 
+Use **`GET /api/v1/dives/years`** to populate the frontend's year dropdown:
+
+```json
+{"items":[2026,2025,2023]}
+```
+
+Only years present in stored dive local dates are returned, unique and newest
+first. Missing dates are omitted; an empty logbook returns `{"items":[]}`.
+The complete list is independent of pagination and active country/rating/date
+filters. Choose a value with `/api/v1/dives?year=2025`, or omit `year` for all
+years. Refetch after imports/refreshes; no restart or Garmin request is needed.
+
 Countries use stable uppercase codes and both names, for example
 `{"code":"EG","name_fr":"Égypte","name_en":"Egypt"}`. Filters accept a
 code or either name, ignoring case and accents. `GET /api/v1/countries?q=egypte`
@@ -445,7 +457,7 @@ generated country/year names are bilingual immediately without DeepL.
 
 | Method / path | Purpose |
 | --- | --- |
-| `GET /api/v1/trips` | Paginated list; filters `name` (French/English), `year`, `country`, `from`, `to`, `min_rating`, `max_rating` |
+| `GET /api/v1/trips` | Paginated list; filters `name` (French/English), `year`, `country`, `from`, `to`, `ratings` |
 | `POST /api/v1/trips` | Create a manual trip; provide `year`, `country_code`, optional text/metadata and `dive_ids` |
 | `GET /api/v1/trips/{tripID}` | Metadata, linked `dive_ids`, own `media`, and `favorite_dive_media` |
 | `PATCH /api/v1/trips/{tripID}` | Update metadata, overrides, cover, or replace `dive_ids` |
@@ -457,7 +469,7 @@ generated country/year names are bilingual immediately without DeepL.
 
 Date filters match trips **overlapping** the inclusive range; trips without dives
 have empty dates and do not match date filters. Name search ignores case and
-accents. Missing ratings do not match rating bounds. The first/last linked dives
+accents. Missing ratings do not match rating selections. The first/last linked dives
 determine dates. `name`, `year`, and `country_code` accept `null` in PATCH to
 restore generated values; `name_en` optionally supplies a custom English name.
 Replacing `dive_ids` makes listed links manual and persistently excludes removed
@@ -465,6 +477,19 @@ members. Deleting a trip does not cause its current dives to reappear in a new
 automatic trip. Empty, untouched automatic groups are hidden from the trip list
 unless they contain trip media. Backfills prefer retaining a customized/media-
 bearing group when joining temporary automatic groups.
+
+Filter trip ratings the same way as dives:
+
+```text
+/api/v1/trips?ratings=4,5
+/api/v1/trips?ratings=4,4.5,5&year=2026&country=EG
+```
+
+Selections match exact values of the **trip's own rating**, independently of
+member dives. Zero and decimals are supported; unrated trips are excluded while
+filtering. Omit `ratings` to include rated and unrated trips. The removed
+`min_rating`/`max_rating` parameters return 400 `invalid_request`; use `ratings`
+instead. Keep the same filters while following `next_cursor`.
 
 ### Trip media and favorite dive media
 
@@ -607,6 +632,21 @@ format, and a case-insensitive `location` substring. For example:
 ```text
 /api/v1/dives?from=2026-01-01&to=2026-08-31&location=noumea&limit=20
 ```
+
+Select exact dive ratings with `ratings=4,5` (4 OR 5), optionally combined with
+the other filters:
+
+```text
+/api/v1/dives?ratings=4,5&year=2026
+/api/v1/trips/{tripID}/dives?ratings=4,5
+```
+
+Decimal scores use a dot (`ratings=4.5`); commas separate choices. Zero is valid,
+unrated dives are excluded while filtering, and omitting `ratings` includes all
+scores and unrated dives. Scores use their stored value without normalization
+by `rating_max` (8/10 matches 8, not 4). At most 100 supplied values are accepted;
+duplicates are ignored and empty, negative, nonfinite or malformed choices return
+400. The order stays newest first. Keep the same filters on subsequent pages.
 
 When more results exist, use the returned `next_cursor` unchanged in the next
 request. Sample lists use the same scheme with a default of 5,000 and maximum

@@ -64,7 +64,7 @@ These are functional responsibilities, not a prescribed visual design.
 | --- | --- |
 | Dive list | GET dives with filters, summary metrics, localized country, rating and cover thumbnail; cursor-based continuation |
 | Dive detail | GET one dive, separate paginated samples for chart, raw notes plus parsed comment/highlights, media; link to trip |
-| Trip list | GET trips filtered by bilingual name, year, country, overlapping dates, rating bounds |
+| Trip list | GET trips filtered by bilingual name, year, country, overlapping dates, rating selections |
 | Trip detail | Editorial content, cruise/operator/price, cover, linked dives, own gallery, favorite dive gallery |
 | Media viewer/editor | Original URL, thumbnail, caption/description, resolved projection; favorite for dive media; cover selection on owner |
 | Residence settings | List/create/edit/delete inclusive home-country periods |
@@ -72,19 +72,56 @@ These are functional responsibilities, not a prescribed visual design.
 | Maintenance | Media status/rescan, country and translation progress/retry, trip rebuild |
 | Country correction (admin) | Paginated missing-country dives, lookup reason/GPS, manual country selection from the full catalog |
 
-No API enumerates available years separately. Use meaningful year controls or
-derive available years from fully loaded results; a single list page is not a
-complete facet list. No public endpoint triggers Garmin sync or edits imported
-dive notes/rating. Do not implement these controls as if such routes existed.
+Use `GET /api/v1/dives/years` for available dive years and
+`GET /api/v1/dives/countries` for available dive countries. These complete choice
+lists are independent of the current dive page. No public endpoint triggers
+Garmin sync or edits imported dive notes/rating. Do not implement these controls
+as if such routes existed.
 
 ## Filtering, pagination, and charts
 
-Dive filters: `year`, `country`, `trip_id`, `from`, `to`, `location`. Country
+Dive filters: `year`, `country`, `trip_id`, `from`, `to`, `location`, `ratings`. Country
 accepts code/French/English name; codes are preferable for query state. Location
 is a case-insensitive substring, not the same accent-folded matching used for
 country/trip names. Combine filters with AND. Trip date filters match overlap;
-dive date filters match individual local dates. An unrated trip does not match
-a rating-bound filter. Zero ratings must remain visible.
+dive date filters match individual local dates. Unrated trips do not match
+rating selections. Zero ratings must remain visible.
+
+Populate the year dropdown from **`GET /api/v1/dives/years`**, for example
+`{"items":[2026,2025,2023]}`. Items are numeric years, unique and newest first,
+derived from dive local dates across the whole logbook. Missing dates are omitted;
+an empty logbook returns `{"items":[]}`. This endpoint has no pagination or
+filters and remains independent of active year/country/rating/date filters.
+Do not infer the available years from one page of dives or generate a continuous
+range that includes years without dives. Use the selected value with
+`GET /api/v1/dives?year=2025`, combine with other filters, and reset the dive
+cursor when changing years. Include an “All years” control by omitting `year`,
+not by sending zero. Refetch year choices after a Garmin import/refresh or when
+reloading the logbook; they reflect stored data immediately without a restart.
+The endpoint is public after setup, with the normal 503 gate beforehand.
+
+Use `GET /api/v1/dives?ratings=4,5` for a selection of exact ratings (4 OR 5).
+This also works on `/api/v1/trips/{tripID}/dives`. A multi-select can send a
+comma-separated list, including decimal scores with a dot, such as `ratings=4,4.5,5`.
+Omit the parameter when no rating is selected; `ratings=` is invalid. Unrated
+dives are excluded while filtering; zero is a valid selection. Compare the raw
+`rating`, without converting `rating_max`: `N:8/10` matches 8, not 4. Duplicates
+are ignored, and repeated parameters are accepted. At most 100 supplied values
+are allowed; malformed, empty, negative, nonfinite or excessive values return
+400 `invalid_request`. Rating selections combine with other filters using AND.
+The order stays newest first. Retain the selection for cursor requests and reset
+pagination when it changes.
+
+Trip lists support the same selection: **`GET /api/v1/trips?ratings=4,5`**.
+Use the same multi-select serialization, validation, duplicate handling and
+100-value limit as dives. `ratings=4,5` selects exact 4 or 5 scores; include 4.5
+explicitly when wanted. This matches the trip's own nullable 0–5 rating, independent
+of linked dive scores. Omit the parameter for all rated and unrated trips.
+Use `ratings` for every rating selection; `min_rating` and `max_rating` have been
+removed and return 400 `invalid_request`, including empty values or combinations
+with `ratings`. All name/year/country/date filters intersect the selection,
+and the order remains descending trip start date/ID. Keep every
+filter unchanged on subsequent cursor pages; reset the cursor on selection changes.
 
 Populate the dive-country dropdown from **`GET /api/v1/dives/countries`**, which
 returns `{items: [{code, name_fr, name_en}]}` containing only countries present in
