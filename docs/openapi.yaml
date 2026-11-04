@@ -17,7 +17,9 @@ info:
     durations in seconds, and sample timestamps/elapsed times in milliseconds.
 
 
-    Media originals retain their filenames and bytes. Metadata and thumbnails
+    Videos and small photos retain their filenames and bytes. Larger photos become JPEG XL
+
+    after verified processing; their source is deleted after a successful SQL update. Metadata and thumbnails
 
     are indexed at server startup or by POST /api/v1/media/scan. Uploads and scans
 
@@ -38,11 +40,11 @@ tags:
   - name: Health
     description: Local database health
   - name: Dives
-    description: Dive summaries, source documents, FIT data, and graph samples
+    description: Dive summaries, source documents, graph samples, and private original FIT downloads
   - name: Media
     description: Photos, videos, descriptions, 360-degree projection metadata, captions, and filesystem indexing
   - name: Assets
-    description: Original media and JPEG thumbnails with range/conditional requests
+    description: Retained media, JXL photo/JPEG video thumbnails, and cached JPEG fallbacks with range/conditional requests
   - name: Translations
     description: Background French-to-English translation, cached in the local database
 
@@ -138,6 +140,74 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/admin/dives/{id}/fit:
+    parameters:
+    - $ref: '#/components/parameters/ActivityID'
+    get:
+      tags: [Dives]
+      operationId: downloadOriginalFIT
+      summary: Download cached original FIT files (administrator only)
+      description: >-
+        Requires an authenticated administrator session, including HEAD and range
+        requests. Reads stored original bytes from SQL without contacting Garmin.
+        One file returns a .fit attachment; multiple files return a ZIP attachment
+        containing every original, with index-prefixed basenames to prevent paths
+        and duplicate names. Every file's size and SHA-256 are verified first.
+        Successful downloads use Cache-Control private, no-store and
+        Content-Disposition attachment. Single files support byte ranges; ZIPs
+        stream in full. HEAD returns headers only. FIT documents and Base64 file
+        contents are never embedded in JSON responses, even for administrators
+        or include=fit requests.
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
+      responses:
+        '200':
+          description: Original .fit file, or a ZIP when multiple files are stored.
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+              description: attachment with a safe filename.
+            Cache-Control:
+              schema: { type: string }
+              description: private, no-store.
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+            application/zip:
+              schema: { type: string, format: binary }
+        '206':
+          description: Requested byte range of a single original FIT file.
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: Administrator authentication required, or session expired/revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: not_found for an unknown dive; fit_unavailable when no original FIT is stored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '416':
+          description: Invalid byte range for a single original FIT file.
+          content:
+            text/plain:
+              schema: { type: string }
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          description: Setup incomplete, or runtime/session database unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/dives/{id}:
     parameters:
     - $ref: '#/components/parameters/ActivityID'
@@ -145,17 +215,19 @@ paths:
       tags:
       - Dives
       operationId: getDive
-      summary: Read a dive with source documents, decoded FIT data, and media
+      summary: Read a dive with Garmin source documents, indexed metadata, and media
       description: 'Raw Garmin documents can contain additional fields or be null. Personal
 
         API dives have activity_details set to null; their samples come from FIT.
 
-        The fit document includes every decoded message and original FIT bytes.
+        FIT documents and original file bytes are omitted entirely, including for
+        administrators and include=fit requests. Original FIT files are available
+        only at the authenticated download /api/v1/admin/dives/{id}/fit.
 
         '
       responses:
         '200':
-          description: Dive summary and all retained documents.
+          description: Dive summary, Garmin documents, indexed metadata/alerts and media, without FIT documents.
           content:
             application/json:
               schema:
@@ -239,6 +311,11 @@ paths:
       - Dives
       operationId: listDiveSamples
       summary: Read dive profile samples in sample-index order
+      description: >-
+        Returns indexed chart measurements only. Raw source/FIT records are
+        internal SQL data and are never embedded in sample responses, even for
+        administrators or include_raw=true requests. Every stored sample is
+        available through cursor pagination; measurements are not downsampled.
       parameters:
       - name: limit
         in: query
@@ -275,7 +352,7 @@ paths:
       tags:
       - Media
       operationId: listDiveMedia
-      summary: List attachments, sorted by original filename
+      summary: List attachments, sorted by retained filename
       parameters:
       - $ref: '#/components/parameters/PageLimit'
       - $ref: '#/components/parameters/Cursor'
@@ -303,26 +380,27 @@ paths:
       tags:
       - Media
       operationId: uploadDiveMedia
-      summary: Upload one original photo or video
-      description: 'Send exactly one multipart field named file, retaining its original
-
-        filename. Filenames cannot start with a dot or contain path separators
-
-        or control characters, and are limited to 255 bytes. Existing names
-
-        return 409 and are never overwritten, including files not yet indexed.
-
+      summary: Upload and process one photo or video
+      description: |
+        Send exactly one multipart field named file. Filenames cannot start with a dot,
+        contain separators/control characters, or exceed 255 bytes. Existing names,
+        including converted original-name aliases and unindexed files, return 409, except
+        re-uploading an original HEIC to repair a legacy decoder conversion preserves
+        that existing media ID and its editorial fields/covers.
         The default upload limit is 16 GiB; read the current limit from media/status.
-
-        Processing is synchronous. An unsupported codec or missing FFmpeg still
-
-        returns 201 with thumbnail_status=error; the original remains available.
-
+        Processing is synchronous. A photo strictly below 1,000,000 bytes AND below
+        2048 pixels on its shorter side keeps its bytes/name. Other photos become JXL
+        at 1080 on the shorter side, cjxl -d 1.5 -e 7. All photos get a JXL thumbnail
+        at 480 on the shorter side, -d 2.0 -e 8. Aspect ratio is preserved, no upscaling.
+        Converted names append .jxl (very long names are shortened with a hash).
+        Only after verified image/thumbnail processing and SQL success is the source
+        deleted. IDs, descriptions, favorites and covers survive conversion/rescans.
+        HEIC uses libheif for full grid assembly and orientation, never a single HEVC
+        tile. Ambiguous multi-image HEIF containers retain the source with an error.
+        Unsupported codecs, missing tools, and animated sources requiring conversion
+        keep the source with thumbnail_status=error. Videos retain original bytes.
         Spherical projection metadata is detected when present. Use PATCH with
-
         projection="360" for an untagged stitched equirectangular export.
-
-        '
       requestBody:
         required: true
         content:
@@ -339,7 +417,7 @@ paths:
                   description: One photo or video with its original filename.
       responses:
         '201':
-          description: Original stored and indexed; inspect thumbnail_status for processing results.
+          description: Retained file stored and indexed; inspect thumbnail_status for processing results.
           headers:
             Location:
               description: Relative URL of the created attachment metadata.
@@ -421,13 +499,13 @@ paths:
 
         or caption clears that field. Descriptions describe what the photo/video
 
-        shows and can contain up to 8192 UTF-8 bytes. Changing projection or stereo_layout regenerates the JPEG
+        shows and can contain up to 8192 UTF-8 bytes. Changing projection or stereo_layout regenerates the
 
         thumbnail. Use projection="360" for an untagged stitched equirectangular
 
         video, "flat" to disable spherical playback, or "auto" to use detected
 
-        metadata. Originals are never converted or modified.
+        metadata. This metadata edit does not re-encode the retained master.
 
         '
       requestBody:
@@ -522,6 +600,8 @@ paths:
     - $ref: '#/components/parameters/IfNoneMatch'
     - $ref: '#/components/parameters/IfModifiedSince'
     - $ref: '#/components/parameters/IfRange'
+    - $ref: '#/components/parameters/MediaImageFormat'
+    - $ref: '#/components/parameters/MediaImageAccept'
     - name: v
       in: query
       description: Optional thumbnail version from thumbnail_url; the current thumbnail is always served.
@@ -531,12 +611,19 @@ paths:
       tags:
       - Assets
       operationId: getDiveMediaThumbnail
-      summary: Serve the JPEG thumbnail, up to 640 pixels per dimension
-      description: Equirectangular 360-degree media uses a 640x360 perspective preview. Other formats use a scaled
-        decoded frame. A missing or failed thumbnail returns 404 thumbnail_unavailable; rescan to retry processing.
+      summary: Serve a photo or video thumbnail
+      description: |
+        Photos use JXL at a 480-pixel shorter side without upscaling; JPEG fallback
+        is generated on demand and cached. Videos use JPEG up to 640x640, with a
+        640x360 perspective preview for equirectangular 360 video. Photo 360 previews
+        target a 480-pixel shorter side without upscaling. Auto format selects JXL
+        only for explicit positive Accept: image/jxl; otherwise JPEG is served.
+        Use format=original for stored thumbnail bytes, or format=jpeg for JPEG.
+        Auto photo responses vary by Accept, with representation-specific ETags.
+        Missing/failed thumbnails return 404 thumbnail_unavailable; rescan to retry.
       responses:
         '200':
-          description: Complete JPEG thumbnail.
+          description: Complete thumbnail in the selected image format.
           headers:
             ETag:
               $ref: '#/components/headers/ETag'
@@ -546,6 +633,10 @@ paths:
               $ref: '#/components/headers/AcceptRanges'
           content:
             image/jpeg:
+              schema:
+                type: string
+                format: binary
+            image/jxl:
               schema:
                 type: string
                 format: binary
@@ -601,6 +692,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /assets/{id}/{filename}:
     parameters:
+    - $ref: '#/components/parameters/MediaImageFormat'
+    - $ref: '#/components/parameters/MediaImageAccept'
     - $ref: '#/components/parameters/ActivityID'
     - name: filename
       in: path
@@ -618,20 +711,19 @@ paths:
       tags:
       - Assets
       operationId: getMediaOriginal
-      summary: Serve an original photo or video
-      description: 'Streams original bytes with their stored Content-Type and inline filename.
-
-        Range requests support video seeking. If an indexed file changed on disk,
-
-        returns 409 media_changed until a rescan refreshes its metadata. Directory
-
-        browsing is disabled. The frontend can use effective_projection and
-
-        projection_format to select a 360-degree player; the server preserves
-
-        the original container without transcoding or stitching camera footage.
-
-        '
+      summary: Serve a retained photo or original video
+      description: |
+        Streams retained media with inline filename. Photo content_type in metadata
+        describes the stored master; HTTP Content-Type describes the representation
+        selected here. Auto (default) serves JXL only for explicit positive
+        Accept: image/jxl; otherwise a quality-90 JPEG fallback is generated once
+        and cached. HEIC/TIFF/BMP also use auto JPEG fallback. format=original forces
+        retained bytes; format=jpeg forces JPEG for photos. Valid format choices
+        do not transcode videos. Auto photo responses include Vary: Accept; JXL/JPEG
+        have distinct ETags. Range, HEAD and conditional requests are supported.
+        A changed indexed file returns 409 media_changed until rescan. Directory
+        browsing is disabled. Use effective_projection/projection_format to choose
+        a 360-degree player; video containers are never transcoded or stitched.
       responses:
         '200':
           $ref: '#/components/responses/CompleteFile'
@@ -695,7 +787,7 @@ paths:
       - Media
       operationId: scanMediaAssets
       summary: Reconcile media metadata and thumbnails with the assets directory
-      description: 'Scans assets/<activityID>/<original filename>. Adds new files, updates
+      description: 'Scans dive and trip owner directories. Applies the photo conversion/deletion profile described by upload; completed masters are not repeatedly re-encoded. Recovers interrupted photo publication. Adds new files, updates
 
         changed files, retries missing/failed thumbnails, and removes index
 
@@ -777,6 +869,10 @@ paths:
                 thumbnails_failed: 1
                 max_upload_bytes: 17179869184
                 thumbnail_max_dimension: 640
+                photo_thumbnail_small_side: 480
+                photo_max_small_side: 1080
+                photo_keep_below_bytes: 1000000
+                photo_keep_below_small_side: 2048
         '500':
           $ref: '#/components/responses/InternalError'
         '503':
@@ -1731,7 +1827,7 @@ paths:
       tags:
       - Trips
       operationId: listTripMedia
-      summary: List attachments, sorted by original filename
+      summary: List attachments, sorted by retained filename
       parameters:
       - $ref: '#/components/parameters/PageLimit'
       - $ref: '#/components/parameters/Cursor'
@@ -1759,26 +1855,27 @@ paths:
       tags:
       - Trips
       operationId: uploadTripMedia
-      summary: Upload one original photo or video
-      description: 'Send exactly one multipart field named file, retaining its original
-
-        filename. Filenames cannot start with a dot or contain path separators
-
-        or control characters, and are limited to 255 bytes. Existing names
-
-        return 409 and are never overwritten, including files not yet indexed.
-
+      summary: Upload and process one photo or video
+      description: |
+        Send exactly one multipart field named file. Filenames cannot start with a dot,
+        contain separators/control characters, or exceed 255 bytes. Existing names,
+        including converted original-name aliases and unindexed files, return 409, except
+        re-uploading an original HEIC to repair a legacy decoder conversion preserves
+        that existing media ID and its editorial fields/covers.
         The default upload limit is 16 GiB; read the current limit from media/status.
-
-        Processing is synchronous. An unsupported codec or missing FFmpeg still
-
-        returns 201 with thumbnail_status=error; the original remains available.
-
+        Processing is synchronous. A photo strictly below 1,000,000 bytes AND below
+        2048 pixels on its shorter side keeps its bytes/name. Other photos become JXL
+        at 1080 on the shorter side, cjxl -d 1.5 -e 7. All photos get a JXL thumbnail
+        at 480 on the shorter side, -d 2.0 -e 8. Aspect ratio is preserved, no upscaling.
+        Converted names append .jxl (very long names are shortened with a hash).
+        Only after verified image/thumbnail processing and SQL success is the source
+        deleted. IDs, descriptions, favorites and covers survive conversion/rescans.
+        HEIC uses libheif for full grid assembly and orientation, never a single HEVC
+        tile. Ambiguous multi-image HEIF containers retain the source with an error.
+        Unsupported codecs, missing tools, and animated sources requiring conversion
+        keep the source with thumbnail_status=error. Videos retain original bytes.
         Spherical projection metadata is detected when present. Use PATCH with
-
         projection="360" for an untagged stitched equirectangular export.
-
-        '
       requestBody:
         required: true
         content:
@@ -1795,7 +1892,7 @@ paths:
                   description: One photo or video with its original filename.
       responses:
         '201':
-          description: Original stored and indexed; inspect thumbnail_status for processing results.
+          description: Retained file stored and indexed; inspect thumbnail_status for processing results.
           headers:
             Location:
               description: Relative URL of the created attachment metadata.
@@ -1875,9 +1972,9 @@ paths:
       summary: Update description, caption, or 360-degree projection settings
       description: "Provide at least one field. Omitted fields are kept. An empty description\nor caption clears that\
         \ field. Descriptions describe what the photo/video\nshows and can contain up to 8192 UTF-8 bytes. Changing\
-        \ projection or stereo_layout regenerates the JPEG\nthumbnail. Use projection=\"360\" for an untagged stitched\
-        \ equirectangular\nvideo, \"flat\" to disable spherical playback, or \"auto\" to use detected\nmetadata. Originals\
-        \ are never converted or modified.\n Favorites are only supported for dive-owned media."
+        \ projection or stereo_layout regenerates the\nthumbnail. Use projection=\"360\" for an untagged stitched\
+        \ equirectangular\nvideo, \"flat\" to disable spherical playback, or \"auto\" to use detected\nmetadata. This edit does not\
+        \ re-encode the retained master.\n Favorites are only supported for dive-owned media."
       requestBody:
         required: true
         content:
@@ -1970,6 +2067,8 @@ paths:
     - $ref: '#/components/parameters/IfNoneMatch'
     - $ref: '#/components/parameters/IfModifiedSince'
     - $ref: '#/components/parameters/IfRange'
+    - $ref: '#/components/parameters/MediaImageFormat'
+    - $ref: '#/components/parameters/MediaImageAccept'
     - name: v
       in: query
       description: Optional thumbnail version from thumbnail_url; the current thumbnail is always served.
@@ -1979,12 +2078,19 @@ paths:
       tags:
       - Trips
       operationId: getTripMediaThumbnail
-      summary: Serve the JPEG thumbnail, up to 640 pixels per dimension
-      description: Equirectangular 360-degree media uses a 640x360 perspective preview. Other formats use a scaled
-        decoded frame. A missing or failed thumbnail returns 404 thumbnail_unavailable; rescan to retry processing.
+      summary: Serve a photo or video thumbnail
+      description: |
+        Photos use JXL at a 480-pixel shorter side without upscaling; JPEG fallback
+        is generated on demand and cached. Videos use JPEG up to 640x640, with a
+        640x360 perspective preview for equirectangular 360 video. Photo 360 previews
+        target a 480-pixel shorter side without upscaling. Auto format selects JXL
+        only for explicit positive Accept: image/jxl; otherwise JPEG is served.
+        Use format=original for stored thumbnail bytes, or format=jpeg for JPEG.
+        Auto photo responses vary by Accept, with representation-specific ETags.
+        Missing/failed thumbnails return 404 thumbnail_unavailable; rescan to retry.
       responses:
         '200':
-          description: Complete JPEG thumbnail.
+          description: Complete thumbnail in the selected image format.
           headers:
             ETag:
               $ref: '#/components/headers/ETag'
@@ -1994,6 +2100,10 @@ paths:
               $ref: '#/components/headers/AcceptRanges'
           content:
             image/jpeg:
+              schema:
+                type: string
+                format: binary
+            image/jxl:
               schema:
                 type: string
                 format: binary
@@ -2049,6 +2159,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /assets/trips/{tripID}/{filename}:
     parameters:
+    - $ref: '#/components/parameters/MediaImageFormat'
+    - $ref: '#/components/parameters/MediaImageAccept'
     - $ref: '#/components/parameters/TripID'
     - name: filename
       in: path
@@ -2066,20 +2178,19 @@ paths:
       tags:
       - Assets
       operationId: getMediaOriginalTrip
-      summary: Serve an original photo or video
-      description: 'Streams original bytes with their stored Content-Type and inline filename.
-
-        Range requests support video seeking. If an indexed file changed on disk,
-
-        returns 409 media_changed until a rescan refreshes its metadata. Directory
-
-        browsing is disabled. The frontend can use effective_projection and
-
-        projection_format to select a 360-degree player; the server preserves
-
-        the original container without transcoding or stitching camera footage.
-
-        '
+      summary: Serve a retained photo or original video
+      description: |
+        Streams retained media with inline filename. Photo content_type in metadata
+        describes the stored master; HTTP Content-Type describes the representation
+        selected here. Auto (default) serves JXL only for explicit positive
+        Accept: image/jxl; otherwise a quality-90 JPEG fallback is generated once
+        and cached. HEIC/TIFF/BMP also use auto JPEG fallback. format=original forces
+        retained bytes; format=jpeg forces JPEG for photos. Valid format choices
+        do not transcode videos. Auto photo responses include Vary: Accept; JXL/JPEG
+        have distinct ETags. Range, HEAD and conditional requests are supported.
+        A changed indexed file returns 409 media_changed until rescan. Directory
+        browsing is disabled. Use effective_projection/projection_format to choose
+        a 360-degree player; video containers are never transcoded or stitched.
       responses:
         '200':
           $ref: '#/components/responses/CompleteFile'
@@ -2581,6 +2692,21 @@ components:
       name: garmindives_session
       description: Local HTTP development only when GARMIN_COOKIE_SECURE=false. Production uses adminSession over HTTPS.
   parameters:
+    MediaImageFormat:
+      name: format
+      in: query
+      description: Photo representation. Auto negotiates JXL using explicit Accept support, otherwise cached JPEG. Original forces retained bytes (not the deleted pre-conversion source); jpeg forces JPEG. Videos ignore valid choices.
+      schema:
+        type: string
+        enum: [auto, original, jpeg]
+        default: auto
+    MediaImageAccept:
+      name: Accept
+      in: header
+      description: In auto mode, explicit image/jxl with positive quality selects native JXL. Wildcards and image/jxl;q=0 select cached JPEG. Ignored for explicit format choices and videos.
+      schema:
+        type: string
+      example: image/jxl,image/jpeg;q=0.9
     TripID:
       name: tripID
       in: path
@@ -2703,7 +2829,7 @@ components:
       schema: { type: string }
       example: bytes 0-1023/1048576
     ContentDisposition:
-      description: Inline disposition with the original filename (or generated JPEG thumbnail filename).
+      description: Inline disposition with the retained filename or generated representation filename.
       schema: { type: string }
 
   responses:
@@ -2743,7 +2869,7 @@ components:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
           example: { error: { code: internal_error, message: Internal server error } }
     CompleteFile:
-      description: Complete original bytes, using the stored media Content-Type.
+      description: Complete retained media or selected photo representation, with the corresponding Content-Type.
       headers:
         ETag: { $ref: '#/components/headers/ETag' }
         Last-Modified: { $ref: '#/components/headers/LastModified' }
@@ -2991,10 +3117,10 @@ components:
       required: [id, filename, description, url, translations]
       properties:
         id: { type: string, description: Selected photo attachment ID. }
-        filename: { type: string, description: Original photo filename. }
+        filename: { type: string, description: Retained photo filename; converted names include the original name and .jxl. }
         description: { type: string, description: User-provided description of the photo; empty when unset. }
-        url: { type: string, description: Relative URL of the original photo. }
-        thumbnail_url: { type: string, description: Relative versioned JPEG thumbnail URL; omitted if processing failed. }
+        url: { type: string, description: Relative URL of the retained photo with auto image negotiation. }
+        thumbnail_url: { type: string, description: Relative versioned thumbnail URL with auto JXL/JPEG negotiation; omitted if processing failed. }
         translations: { $ref: '#/components/schemas/Translations' }
     DivePatch:
       type: object
@@ -3021,13 +3147,12 @@ components:
       minProperties: 1
     DiveDetail:
       type: object
-      required: [dive, activity, activity_details, dive_details, fit, record_metadata, alerts, media]
+      required: [dive, activity, activity_details, dive_details, record_metadata, alerts, media]
       properties:
         dive: { $ref: '#/components/schemas/DiveSummary' }
         activity: { $ref: '#/components/schemas/JSONValue' }
         activity_details: { $ref: '#/components/schemas/JSONValue' }
         dive_details: { $ref: '#/components/schemas/JSONValue' }
-        fit: { $ref: '#/components/schemas/FITDocument' }
         record_metadata:
           type: array
           items: { $ref: '#/components/schemas/RecordMetadata' }
@@ -3061,7 +3186,7 @@ components:
         next_cursor: { type: string }
     DiveSample:
       type: object
-      required: [index, timestamp_ms, elapsed_ms, raw]
+      required: [index, timestamp_ms, elapsed_ms]
       properties:
         index: { type: integer, minimum: 0 }
         timestamp_ms: { type: integer, format: int64, description: Unix milliseconds. }
@@ -3081,63 +3206,6 @@ components:
         air_time_remaining_seconds: { type: number, format: double }
         po2: { type: number, format: double, description: Oxygen partial pressure in bar. }
         ascent_rate: { type: number, format: double, description: Meters per second. }
-        raw: { $ref: '#/components/schemas/JSONValue' }
-    FITDocument:
-      type: object
-      nullable: true
-      description: Full decoded FIT archive; null if no FIT data is stored. Unknown messages/fields retain numeric identifiers.
-      required: [version, files]
-      properties:
-        version: { type: integer, example: 1 }
-        files:
-          type: array
-          items: { $ref: '#/components/schemas/FITFile' }
-    FITFile:
-      type: object
-      required: [name, original_base64, sequences]
-      properties:
-        name: { type: string }
-        original_base64: { type: string, format: byte, description: Exact original FIT bytes encoded as base64. }
-        sequences:
-          type: array
-          items: { $ref: '#/components/schemas/FITSequence' }
-    FITSequence:
-      type: object
-      required: [protocol_version, profile_version, messages]
-      properties:
-        protocol_version: { type: integer }
-        profile_version: { type: integer }
-        messages:
-          type: array
-          items: { $ref: '#/components/schemas/FITMessage' }
-    FITMessage:
-      type: object
-      required: [number, name, fields]
-      properties:
-        number: { type: integer }
-        name: { type: string }
-        timestamp_ms: { type: integer, format: int64, description: Unix milliseconds when the message has a valid timestamp. }
-        fields:
-          type: array
-          items: { $ref: '#/components/schemas/FITField' }
-        developer_fields:
-          type: array
-          items: { $ref: '#/components/schemas/FITField' }
-    FITField:
-      type: object
-      required: [number, name, type, base_type, scale, offset, raw, value]
-      properties:
-        number: { type: integer }
-        name: { type: string }
-        type: { type: string }
-        base_type: { type: string }
-        units: { type: string }
-        scale: { type: number, format: double }
-        offset: { type: number, format: double }
-        raw: { $ref: '#/components/schemas/JSONValue' }
-        value: { $ref: '#/components/schemas/JSONValue' }
-        developer_data_index: { type: integer }
-        expanded: { type: boolean }
     MediaList:
       type: object
       required: [items]
@@ -3188,7 +3256,7 @@ components:
           description: Garmin activity ID.
         filename:
           type: string
-          description: Original filename, preserved exactly.
+          description: Retained filename. Converted photos append .jxl to the original name; exceptionally long names are shortened with a hash. Videos and small photos retain their names.
         kind:
           type: string
           enum:
@@ -3248,11 +3316,11 @@ components:
           - error
         thumbnail_error:
           type: string
-          description: Present when inspection or thumbnail generation failed.
+          description: Present when inspection/thumbnail generation failed, or an older HEIC conversion requires its original source for repair.
         probe:
           type: object
           additionalProperties: true
-          description: Full FFprobe format/stream metadata, or an empty object on inspection failure.
+          description: Inspection metadata and optional garmindives_photo processing marker (version 1, source filename/hash, projection hints, optional heif_decoder_version=1); HEIF inspection describes the complete oriented image. Empty on inspection failure.
         created_at:
           type: string
           format: date-time
@@ -3261,10 +3329,10 @@ components:
           format: date-time
         url:
           type: string
-          description: Relative URL for the original file; its filename is already URL-encoded.
+          description: Relative URL for the retained file; filename is URL-encoded. Photos negotiate JXL/JPEG unless format is explicit.
         thumbnail_url:
           type: string
-          description: Relative versioned JPEG URL; omitted unless thumbnail_status is ready.
+          description: Relative versioned thumbnail URL (photo JXL with JPEG fallback, video JPEG); omitted unless thumbnail_status is ready.
         translations:
           $ref: '#/components/schemas/Translations'
         trip_id:
@@ -3374,7 +3442,7 @@ components:
         failed: { type: integer, minimum: 0, description: Indexing or thumbnail failures; may overlap added/updated counts. }
     MediaStatus:
       type: object
-      required: [total, photos, videos, thumbnails_ready, thumbnails_failed, max_upload_bytes, thumbnail_max_dimension]
+      required: [total, photos, videos, thumbnails_ready, thumbnails_failed, max_upload_bytes, thumbnail_max_dimension, photo_thumbnail_small_side, photo_max_small_side, photo_keep_below_bytes, photo_keep_below_small_side]
       properties:
         total: { type: integer, format: int64, minimum: 0 }
         photos: { type: integer, format: int64, minimum: 0 }
@@ -3382,7 +3450,11 @@ components:
         thumbnails_ready: { type: integer, format: int64, minimum: 0 }
         thumbnails_failed: { type: integer, format: int64, minimum: 0 }
         max_upload_bytes: { type: integer, format: int64, minimum: 1, example: 17179869184 }
-        thumbnail_max_dimension: { type: integer, example: 640 }
+        thumbnail_max_dimension: { type: integer, example: 640, description: Video thumbnail maximum dimension. }
+        photo_thumbnail_small_side: { type: integer, example: 480 }
+        photo_max_small_side: { type: integer, example: 1080 }
+        photo_keep_below_bytes: { type: integer, format: int64, example: 1000000, description: Strict byte threshold; both keep thresholds must match. }
+        photo_keep_below_small_side: { type: integer, example: 2048, description: Strict shorter-side threshold; both keep thresholds must match. }
 
     Country:
       type: object

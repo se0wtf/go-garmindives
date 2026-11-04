@@ -156,9 +156,26 @@ for summary fallback convert semicircles by `value * 180 / 2^31`.
 `fit.version` is 1. Each decoded file also has `original_base64`. Persist each
 file's exact decoded bytes as a SQL BLOB/BYTEA with byte count and SHA-256.
 The persisted bytes are the individual FIT files, not the surrounding ZIP
-container. Re-decoding from SQL requires no Garmin request. Do not advertise a
-public “download original FIT” endpoint: no dedicated such route exists; original
-base64 is in the complete decoded document.
+container. Re-decoding from SQL requires no Garmin request. Decoded documents
+and their original_base64 fields are internal SQL data. Dive-detail queries must
+not select fit_json, and no JSON API response embeds a full FIT document or file
+bytes, including for administrators and include=fit requests.
+
+Original downloads exist only at GET /api/v1/admin/dives/{id}/fit, behind the same
+session/version checks as every admin route. Use the retained BLOB/BYTEA data,
+validate every file's size/checksum before starting a response, and make no Garmin
+call. Return 404 not_found for an unknown dive and 404 fit_unavailable for no
+cached originals. With one file, send the original bytes as application/octet-stream,
+attachment, using a sanitized basename/fallback .fit filename; support HEAD and
+byte ranges. With multiple files, stream application/zip using ZIP Store entries,
+one original per entry, flattening paths and prefixing file indices to prevent
+name collisions. HEAD returns headers without generating the ZIP body. Use
+private, no-store caching. Never append a JSON error to an already-started binary
+stream. Ordinary indexed measurements and alerts remain public. Per-sample
+raw_json stays internal: sample queries must not select it and JSON sample items
+must omit raw entirely, including for admins and include_raw=true requests.
+Return all indexed measurements, preserve zero versus missing values, and retain
+sample counts/order and cursor behavior without downsampling or provider calls.
 
 Queryable summary precedence is source JSON, then FIT session summaries, then
 FIT dive summaries, filling missing fields only. Session summaries describe the
@@ -378,8 +395,9 @@ its prior index. A missing known directory can remove its indexed attachments.
 Soft-deleted trips retain indexed media and files, although active routes reject them.
 
 For each eligible file, skip only if size+mtime match, thumbnail is ready/present,
-and its cache key matches current processing options. Otherwise hash bytes,
-inspect, generate preview, verify the same file identity/size/mtime still exists,
+and its cache key matches current processing options. Photos also require the
+current processing marker. Otherwise hash bytes,
+inspect, process the photo if needed, generate preview, verify the same file identity/size/mtime still exists,
 then upsert metadata. Preserve attachment ID, original creation time, caption,
 description, favorite, and explicit projection/stereo overrides. Processing failure
 records thumbnail error but keeps the original; a file changed during processing
@@ -390,7 +408,9 @@ Uploads stream to `.uploads/<random-id>`, enforce max+1 byte check and nonempty
 content, validate the complete multipart body, then publish atomically without
 overwrite (reference implementation uses a hard link within the same root).
 Confirm the owner exists and serialize media mutation/indexing within the serve
-process. Index after publication; roll back the published file on indexing error.
+process. Index after publication. Complete photo uploads remain on disk on indexing/SQL
+error so a later scan can recover their source; video publication is rolled back
+on indexing error.
 Deletion stages an original into hidden trash, deletes SQL metadata, then removes
 trash/preview; on SQL failure restore the original best-effort. These are not
 cross-resource ACID transactions; rescanning repairs recoverable discrepancies.
@@ -399,14 +419,94 @@ FFprobe reads the first usable video/image stream, retaining probe JSON, dimensi
 duration, stereo hints, and spherical mapping. Probe and thumbnail commands each
 have a 2-minute timeout, bounded diagnostic output, and no shell interpolation.
 Linux/macOS reference passes an already confined file descriptor (`/dev/fd/3`).
-Select a representative frame using FFmpeg thumbnail=30. Crop one eye for
+For videos, select a representative frame using FFmpeg thumbnail=30. Crop one eye for
 side-by-side/top-bottom; use 640x360 perspective (90° horizontal, 60° vertical)
 for equirectangular 360, otherwise aspect-preserving maximum 640x640. Output JPEG.
 
-Thumbnail key is SHA-256 hex of
+Video thumbnail key is SHA-256 hex of
 `v2:<mediaID>:<originalSHA256>:<resolvedStereo>:<effectiveProjection>:<format>`.
 Store `.thumbnails/<key>.jpg`, publish through a temporary file, remove obsolete
-previews after successful metadata save. Originals and thumbnails support standard
+previews after successful metadata save.
+
+For photos, use strict AND thresholds: keep source bytes only when size is less
+than 1,000,000 bytes and `min(width,height) < 2048`. Otherwise resize to a 1080-pixel
+shorter side, preserving aspect ratio and never upscaling, and encode using
+`cjxl -d 1.5 -e 7`. Append `.jxl` to the full source name unless already JXL;
+truncate overly long UTF-8 names to a 238-byte valid prefix plus `-`, a 12-hex
+SHA-256 filename suffix, and `.jxl`. Probe and hash describe the retained file.
+An already processed master with matching SHA and profile version is never
+lossily encoded again, even on forced scans or thumbnail regeneration failures.
+
+Every photo gets a JXL thumbnail generated from the retained image with
+`cjxl -d 2.0 -e 8`, 480-pixel shorter side, aspect-preserving and no upscaling.
+Crop stereo to one eye before resizing. Equirectangular 360 previews use a flat
+perspective at 90°/60°, target height `min(480, source shorter side)`, 16:9 width
+rounded to an integer. Overrides change only the thumbnail. Preserve detected
+projection/stereo hints through conversion in SQL.
+
+Decode JXL through `djxl` into PNG, resize photos through FFmpeg, encode with cjxl,
+then decode the output again and verify dimensions before publishing. Each
+external command has a two-minute timeout and bounded diagnostics. Retain animated
+photos requiring primary conversion with a processing error rather than dropping
+their animation. Unsupported tools/codecs also retain the source.
+
+For HEIC/HEIF, recognize the filename extension or HEVC HEIF brands in the `ftyp`
+box. Inspect and render through libheif's `heif-convert`/`heif-dec` into a private
+PNG first. Libheif reconstructs the complete grid and applies crop/rotation/mirror
+transforms; selecting FFmpeg stream `0:v:0` can expose only one tile and is forbidden
+as a fallback. Both threshold dimensions and resized pixels must describe the
+complete oriented image. Decoder absence/failure retains the source. The CLI
+numbers output PNGs when there are multiple top-level images; reject that ambiguous
+case instead of choosing a numbered output. Auxiliary images are not requested.
+
+Persist `heif_decoder_version: 1` for successful HEIC processing. Old source-name
+aliases without it must bypass the unchanged-source cleanup shortcut: an identical
+reintroduced HEIC needs real reprocessing, not deletion. Allow upload of that
+original-name alias as a narrow repair exception to duplicate protection, preserving
+the existing SQL ID/editorial fields/cover. A legacy converted master without its
+source is retained with `thumbnail_status=error` and a source-required explanation;
+do not attempt to repair it by re-encoding its remaining tile. Legacy recovery
+journals must retain any original for the corrected decoder, releasing the old
+intent when a source is available rather than completing its deletion.
+
+Photo thumbnail key is SHA-256 hex of
+`photo-jxl-v1:<mediaID>:<masterSHA256>:<resolvedStereo>:<effectiveProjection>:<format>`;
+for HEIF-decoder-version-1 images, insert `heif-primary-v1:` after `photo-jxl-v1:`;
+store `.thumbnails/<key>.jxl`. Persist processing version 1 and original-name/hash
+alias in `probe_json.garmindives_photo`. Rename the same SQL row by ID so cover
+references, favorites, descriptions, creation time and overrides survive.
+
+Before replacing a master, verify ownership/checksum and retain any old target
+as a hidden hard-link backup. Atomically write and synchronize a `.photo-jobs`
+intent, publish the verified master and thumbnail, synchronize directories, then
+commit metadata. Only then retire source/backup files whose checksums match.
+Source cleanup captures the current path by rename before hashing it; unexpected
+replacement bytes are restored or retained in hidden storage rather than deleted.
+An absent or failed SQL commit rolls publication back. An ambiguous SQL error is
+resolved by reading current metadata using a fresh bounded context. A scan
+recovers pending intents before enumeration and after thumbnail repairs. A committed
+master without its thumbnail keeps its source until a successful repair. The
+version marker makes repeated scans idempotent. When an original-name alias is
+reimported with new, small bytes, retain the small source, preserve the media ID,
+and retire only the obsolete converted master after committing SQL.
+
+Photo asset and thumbnail endpoints accept `format=auto|original|jpeg`; omitted
+means auto. Auto uses JXL only for explicit positive `Accept: image/jxl` (wildcards
+do not assert support, and q=0 refuses it); otherwise serve JPEG. Auto also supplies
+JPEG for HEIC/TIFF/BMP. Explicit original serves retained bytes. Explicit jpeg
+converts non-JPEG photos. Videos ignore valid photo format choices. Unknown format
+values return 400. JPEG fallbacks use quality 90 and composite transparency on white,
+without resizing. Cache under `.fallbacks/<sha256>.jpg`, where the cache key hashes
+`jpeg-q90-white-v1:<masterSHA256 or thumbnailKey>`. Serialize fallback generation
+within the serve process, atomically publish, and reuse on subsequent requests.
+Auto photo responses use `Vary: Accept`; JPEG ETags hash the actual returned bytes
+and cannot match the JXL representation. Metadata describes the retained file,
+not whichever representation a browser requests.
+Direct HEIC JPEG fallbacks prefix the source key with `heif-primary-v1:` before
+hashing, so old cached first-tile JPEGs cannot be reused. Their HTTP ETag still
+hashes the returned JPEG bytes. No overall photo profile change is required.
+
+Retained files and thumbnails support standard
 HEAD/ranges/ETag/Last-Modified semantics. Reject original reads with
 `409 media_changed` when indexed size/mtime no longer match; require rescan rather
 than serving bytes under stale validators. Preserve normal conditional HTTP

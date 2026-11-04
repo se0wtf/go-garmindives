@@ -185,8 +185,13 @@ and date range can change after a backfill; its ID is the navigation identity.
 
 ## Media, covers, favorites, and 360 video
 
-An attachment belongs either to a dive or a trip. Originals live on disk; SQL
-stores metadata and editorial fields. The original filename and bytes are kept.
+An attachment belongs either to a dive or a trip. Media lives on disk; SQL
+stores metadata and editorial fields. Videos and photos below both size thresholds
+keep their original bytes/name. Other photos become JPEG XL and the source is
+deleted after verified processing and a successful SQL update. The retained name
+includes the source filename, for example `reef.jpg.jxl`; IDs and editorial fields
+remain stable. [Processing rules](backend.md#filesystem-media-lifecycle) specify
+the exact thresholds, encoding profiles, and recovery behavior.
 The same name in different owner directories is allowed; the same name within
 one owner is a conflict. Attachment IDs survive rescans and replacements of the
 same indexed filename. A filesystem rename is a removal plus a new attachment,
@@ -199,9 +204,10 @@ cannot be marked favorite. A cover must be an owned **photo**, never a video or
 an attachment belonging to a different owner. Deleting/removing a cover photo
 clears the selection; no replacement is chosen automatically.
 
-Both photos and videos get JPEG previews. Failure to generate a thumbnail does
-not reject an otherwise accepted original. A browser may be unable to decode an
-original format that the backend stores; provide a download/unsupported-format
+Photos get JPEG XL previews; videos get JPEG previews. Photos have cached JPEG
+fallbacks for browsers without JPEG XL support. Failure to generate a thumbnail
+keeps the accepted source with a processing error. A browser may be unable to decode a
+video format that the backend stores; provide a download/unsupported-format
 state. The server does not convert uploads to browser-compatible video formats.
 
 `projection` is the saved hint: `auto`, `flat`, `180`, or `360`.

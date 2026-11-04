@@ -12,9 +12,10 @@
 | Notes rating/comment/highlights | SQL dives | Derived from retained source notes/description |
 | Manual dive country, trip mode, cover | SQL dives | Local edits; survive Garmin imports |
 | Residence history, trips, editorial metadata | SQL | Local edits plus deterministic grouping |
-| Original photos/videos | Filesystem assets | User-owned bytes, API upload or direct copy |
-| Attachment metadata/editorial fields/favorites | SQL media tables | Index plus local edits; ID retained by owner + filename |
-| JPEG previews | Filesystem .thumbnails | Rebuildable cache keyed by bytes and options |
+| Retained photos/videos | Filesystem assets | API upload or direct copy; eligible photos become JXL after verified conversion |
+| Attachment metadata/editorial fields/favorites | SQL media tables | Index plus local edits; IDs survive indexing and photo conversion |
+| JXL photo / JPEG video previews | Filesystem .thumbnails | Rebuildable cache keyed by bytes and options |
+| JPEG photo fallbacks | Filesystem .fallbacks | Rebuildable cache generated on demand |
 | Geocoding/translation results and queues | SQL | Persistent caches with leases/retries |
 | Administrator hash and sessions | SQL | Private auth state |
 | Application settings + initialization identity | YAML, ENV overrides | Shared by serve and sync |
@@ -22,6 +23,10 @@
 
 There is no JSON/YAML dive database or supported file-archive import/export mode.
 JSON SQL columns preserve source data and decoded extensible structures.
+The decoded fit_json cache and original FIT BLOBs are internal storage, never
+embedded in JSON API responses. Original files can be downloaded only through
+the authenticated administrator FIT endpoint; ordinary queries and graphs use
+the indexed summaries/samples. Retain the cached data for future offline decoding.
 
 ## Relational schema
 
@@ -36,7 +41,7 @@ Do not run it to upgrade a database or to create fake setup credentials.
 | schema_migrations | version | Transactionally applied migration versions |
 | dives | activity ID | Imported summary, source JSON, decoded FIT, local overrides and membership |
 | dive_record_metadata | dive_id + position | Indexed graph column keys |
-| dive_samples | dive_id + sample_index | Profile points; nullable optional metrics, raw record JSON |
+| dive_samples | dive_id + sample_index | Profile points; nullable optional metrics and internal-only raw record JSON |
 | dive_alerts | dive_id + alert_index | Recognized alerts / raw source data |
 | dive_fit_files | dive_id + file_index | Exact original FIT bytes, filename, size, SHA-256 |
 | dive_media | random ID | Dive-owned attachments; unique dive_id + filename |
@@ -142,9 +147,12 @@ provider synchronously.
 /config/config.yaml
 /data/dives.db                 # SQLite deployment; PostgreSQL uses its own volume
 /assets/
-  <activity-id>/<original filename>
-  trips/<trip-id>/<original filename>
-  .thumbnails/<versioned-key>.jpg
+  <activity-id>/<retained filename>
+  trips/<trip-id>/<retained filename>
+  .thumbnails/<versioned-key>.jxl  # photos
+  .thumbnails/<versioned-key>.jpg  # videos
+  .fallbacks/<versioned-key>.jpg
+  .photo-jobs/<media-id>.json     # unfinished filesystem/SQL publication
   .uploads/<temporary-id>
 ```
 
@@ -154,6 +162,30 @@ and not start with a dot. Files must be nonempty regular files; no recursive
 subdirectories or symlink imports. Supported extensions/kinds are enumerated in
 [operations](operations.md#media-support). Content type is inferred from extension,
 not a promise that the stored file has been successfully decoded.
+
+Photo processing uses the existing `probe_json` object, with a
+`garmindives_photo` member containing `version: 1`, optional `source_filename`,
+`source_sha256`, `projection`, and `projection_format`. The source fields identify
+the pre-conversion file and allow its original filename to resolve to the existing
+media ID during imports or duplicate-upload checks. Projection hints survive
+conversion even when the new image container does not retain source metadata.
+The row's filename, dimensions, size, checksum and modified time describe the
+retained file. Processing does not require a new SQL schema version.
+HEIC/HEIF processing additionally records `heif_decoder_version: 1`. Earlier HEIC
+conversions without that marker require the source to be reintroduced. Do not
+increment the overall photo profile or re-encode unrelated completed photos for
+a HEIF decoder change. Small retained HEICs receive regenerated previews while
+preserving their original bytes/checksum. Completed HEIF thumbnails include a
+`heif-primary-v1` key component; direct HEIC JPEG fallbacks similarly prefix their
+source checksum to avoid serving old tile-only cached images.
+
+Recovery journals record owner, media ID, source/target paths and checksums,
+thumbnail key, and any backup/obsolete master. Journals and publication directories
+are synchronized before committing metadata or deleting source bytes. A scan
+finishes cleanup when SQL identifies the committed master and thumbnail; otherwise
+it rolls back the publication and restores its backup. Changed source bytes are
+retained. Hidden processing directories are not exposed as asset routes. Keep
+pending journals/backups with the assets when moving an interrupted installation.
 
 Assets URLs require indexed metadata and a live owner. Removing SQL media rows
 does not expose leftover originals through a general file server. Deleting a trip

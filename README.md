@@ -5,7 +5,7 @@ PostgreSQL. It supports Garmin's official Personal API through an API key,
 and the legacy Connect/Dive APIs through an account login. Each dive preserves
 the available JSON documents, original FIT files, and all decoded FIT messages,
 including depth-over-time samples. The local API also manages photos and videos
-attached to each activity, with originals on disk and media metadata in SQL.
+attached to each activity, with media files on disk and metadata in SQL.
 
 The app is unofficial and is not affiliated with Garmin.
 
@@ -26,6 +26,48 @@ Requires Go 1.26 or newer.
 ```sh
 go install github.com/se0wtf/go-garmindives@latest
 ```
+
+### Docker
+
+Build the image and start the API with persistent storage:
+
+```sh
+docker build -t go-garmindives:local .
+docker run -d --name go-garmindives \
+  -p 127.0.0.1:8080:8080 \
+  --mount source=garmindives-data,target=/data \
+  go-garmindives:local
+```
+
+The image includes FFmpeg/FFprobe, JPEG XL encoder/decoder (`cjxl`, `djxl`),
+libheif tools with the libde265 HEVC decoder, TLS certificates, and timezone data.
+It runs as UID/GID **10001:10001**. With default
+settings, `/data` contains `config.yaml`, SQLite `dives.db`, and the `assets/`
+directory. Mount the whole configuration directory so atomic YAML saves work.
+Host bind mounts must be writable by this UID/GID. No personal config, database,
+media, or credentials are copied into the image.
+
+Complete setup through the frontend as described below. Secure cookies are enabled
+for production HTTPS; for local HTTP testing add `-e GARMIN_COOKIE_SECURE=false`
+to `docker run`. The published port above is local to the host; a frontend container
+should reach the backend on a shared Docker network at port 8080.
+
+The same image runs one-shot synchronization after setup:
+
+```sh
+docker run --rm \
+  --mount source=garmindives-data,target=/data \
+  --mount source=garmindives-tokens,target=/tokens \
+  --env-file /path/to/private-sync.env \
+  go-garmindives:local sync
+```
+
+Put Garmin credentials/API key in the private runtime env file. The default token
+cache lives under `/tokens/go-garmindives/`; persist it across sync runs. PostgreSQL
+uses the usual YAML or `GARMIN_DB_TYPE` / `GARMIN_DB_URI` settings in both backend
+roles. Schedule the sync invocation externally; the image has no internal cron.
+CLI arguments after the image replace `serve`, for example
+`admin reset-password` (use `docker run -it` for its password prompt).
 
 ## Configuration and administrator setup
 
@@ -220,7 +262,7 @@ Depth-over-time profiles require only the API key. FIT downloads also work with
 legacy sessions. ZIP archives, multiple FIT files, and chained FIT sequences
 are decoded with CRC validation.
 
-The `fit` document in SQL and REST dive details contains every decoded message:
+The internal `fit_json` document in SQL contains every decoded message:
 records, sessions, laps, dive summaries, gases, settings, tank updates, device
 information, events, and any other messages present in the file. Fields retain
 their numbers, types, units, raw values, and values after applying FIT scales and
@@ -497,7 +539,7 @@ Trips own independent photos/videos under
 `assets/trips/<tripID>/<original filename>`. The normal startup scan and
 `POST /api/v1/media/scan` index these directories too, preserving descriptions,
 projection settings and attachment IDs. Uploads, original filenames, 360-degree
-hints, JPEG thumbnails, range requests, and duplicate-name protection behave like
+hints, photo/video thumbnails, range requests, and duplicate-name protection behave like
 dive media:
 
 ```sh
@@ -586,8 +628,9 @@ migration; existing migrations are never rewritten.
 Future features can load exact original bytes through `sqlStore.FITFiles`, or
 re-decode all cached files with `sqlStore.DecodeStoredFIT`, without a Garmin
 session or a network request. Reads verify byte counts and checksums. The
-SQL/REST FIT documents retain `original_base64` for
-compatibility. A stored binary file also marks its dive as cached for sync,
+Internal SQL FIT documents retain `original_base64` for offline reuse; JSON API
+responses never include the full FIT document or original file bytes. A stored
+binary file also marks its dive as cached for sync,
 even if the decoded JSON is subsequently cleared for reprocessing.
 
 ## REST API
@@ -651,10 +694,29 @@ duplicates are ignored and empty, negative, nonfinite or malformed choices retur
 When more results exist, use the returned `next_cursor` unchanged in the next
 request. Sample lists use the same scheme with a default of 5,000 and maximum
 of 10,000 rows per page. The dive detail endpoint includes the available original
-Garmin JSON documents, the complete `fit` document, record metadata, and alerts; the samples endpoint
+Garmin JSON documents, record metadata, and alerts; the samples endpoint
 provides graph-ready elapsed time, depth, heart rate, temperature, gas, and
 decompression values. Dive details also include a `media` array with attachment
 metadata, original URLs, and available thumbnail URLs.
+
+Sample responses contain extracted measurements only; `raw` is omitted for all
+callers, including admins and `include_raw=true` requests. Raw record JSON remains
+stored internally for future processing. Every sample, its order, and existing
+cursor pagination are retained; no chart samples are discarded or downsampled.
+
+Dive JSON omits `fit` entirely, even for administrators and `?include=fit`.
+For an authenticated admin download, use:
+
+```text
+GET /api/v1/admin/dives/{id}/fit
+```
+
+One cached file downloads as an original binary `.fit` attachment; multiple
+files download as a ZIP. Downloads read SQL directly, verify file sizes/checksums,
+and never contact Garmin. GET/HEAD/range requests require an admin session and
+successful downloads use `Cache-Control: private, no-store`. No cached original
+returns `404 fit_unavailable`. The frontend should show a download control only
+to administrators and use the samples endpoint for public depth/metric charts.
 
 Dive summaries in list/detail responses also include structured fields parsed
 from the stored Garmin note. For example:
@@ -820,9 +882,11 @@ go-garmindives serve -output-dsn /path/to/dives.db -assets-dir /path/to/assets
 
 `-assets-dir` defaults to `assets` in the working directory. It can also be set
 with `GARMIN_ASSETS_DIR`. Keep the same assets directory with its database.
-Install **FFmpeg**, including `ffmpeg` and `ffprobe`, on `PATH` for metadata and
-thumbnail generation (`brew install ffmpeg` on macOS, or your Linux package
-manager's FFmpeg package). Thumbnail processing currently targets Linux/macOS.
+Install **FFmpeg** (`ffmpeg` and `ffprobe`), **JPEG XL tools** (`cjxl` and `djxl`),
+and **libheif** (`heif-convert` or `heif-dec`, with an HEVC decoder) on `PATH`:
+`brew install ffmpeg jpeg-xl libheif` on macOS, or
+`apt-get install ffmpeg libjxl-tools libheif-examples libheif-plugin-libde265`
+on Debian/Ubuntu. Media processing targets Linux/macOS.
 The [FFprobe documentation](https://ffmpeg.org/ffprobe.html) describes the stream
 and format metadata retained in each media item's `probe` document.
 
@@ -836,11 +900,14 @@ assets/
     Reef 360.MP4
 ```
 
-Original filenames, capitalization, and bytes are preserved. Filenames must be
+Videos and small photos preserve their filenames, capitalization, and bytes.
+Converted photos append `.jxl` to the source filename, for example
+`Turtle original.jpeg.jxl`; exceptionally long names are shortened with a hash
+to fit the filename limit. Filenames must be
 at most 255 bytes and cannot contain path separators, control characters, or
 start with a dot. Activity directories contain files directly; nested directories
 and symlinks are skipped. Supported extensions include JPEG/JPS, PNG, GIF, WebP,
-HEIC/HEIF, AVIF, TIFF, BMP, MP4/M4V, MOV, MKV, WebM, AVI, MTS/M2TS, 3GP, INSV, and .360.
+HEIC/HEIF, AVIF, TIFF, BMP, JXL, MP4/M4V, MOV, MKV, WebM, AVI, MTS/M2TS, 3GP, INSV, and .360.
 Actual metadata/thumbnail support depends on the installed FFmpeg build.
 
 Every `serve` activation scans the assets directory **before normal APIs become
@@ -868,8 +935,8 @@ Media reads are public; uploads, metadata edits, deletions, and rescans require 
 | `GET /api/v1/dives/{id}/media/{mediaID}` | Read attachment metadata |
 | `PATCH /api/v1/dives/{id}/media/{mediaID}` | Update description, caption, or 360-degree projection settings |
 | `DELETE /api/v1/dives/{id}/media/{mediaID}` | Delete the original, thumbnail, and metadata |
-| `GET /api/v1/dives/{id}/media/{mediaID}/thumbnail` | Serve the JPEG thumbnail |
-| `GET /assets/{activityID}/{original filename}` | Serve the original; URL-encode the filename |
+| `GET /api/v1/dives/{id}/media/{mediaID}/thumbnail` | Serve the photo/video thumbnail; optional `format=auto`, `original`, or `jpeg` |
+| `GET /assets/{activityID}/{filename}` | Serve the retained media file; URL-encode the filename; same format options |
 | `POST /api/v1/media/scan` | Scan/reconcile files; optional `?force=true` |
 | `GET /api/v1/media/status` | Read totals, thumbnail status counts, and upload limits |
 
@@ -888,8 +955,9 @@ curl -b admin-cookies.txt -X PATCH -H 'Content-Type: application/json' \
 
 Uploads stream to disk and publish only after the complete multipart request is
 validated. They return `201` with the media object and a `Location` header.
-An existing filename within the activity returns `409`; uploads never overwrite
-it, even if the existing file has not been indexed yet. The default per-file
+An existing filename within the activity returns `409`; an existing source file
+is never overwritten, even if it has not been indexed yet. Re-upload of a missing
+original HEIC can repair an older conversion as described below. The default per-file
 upload limit is **16 GiB**, configurable with `-media-max-upload-bytes` or
 `GARMIN_MEDIA_MAX_UPLOAD_BYTES`; oversized uploads return `413`. Direct filesystem
 imports have no upload-size limit. Uploads have a one-hour request read deadline.
@@ -899,9 +967,57 @@ Media objects include `id`, `dive_id`, `filename`, `kind`, `content_type`,
 `projection`, `effective_projection`, optional `projection_format`, timestamps, `probe`, `url`,
 and `thumbnail_status` (`ready` or `error`). A successful thumbnail adds
 `thumbnail_url`; a failed inspection or thumbnail adds `thumbnail_error` instead.
-Originals are still accepted and served when tools/codecs are missing; install
-the tools and rescan to retry. Thumbnails are JPEG images with a maximum dimension
-of 640 pixels, stored separately under `assets/.thumbnails`.
+Sources are still accepted and served when tools/codecs are missing; install
+the tools and rescan to retry. Video thumbnails are JPEG images with a maximum
+dimension of 640 pixels. Photo thumbnails are JPEG XL, as described below.
+
+Photo processing applies to API uploads and filesystem scans, for dives and trips:
+
+| Source condition | Retained photo | Thumbnail |
+| --- | --- | --- |
+| Strictly less than 1,000,000 bytes **and** shorter side strictly less than 2048 pixels | Original bytes and filename | JXL, shorter side 480, `-d 2.0 -e 8` |
+| Any other size/resolution | JXL, shorter side 1080, `-d 1.5 -e 7` | JXL, shorter side 480, `-d 2.0 -e 8` |
+
+Resizing preserves aspect ratio and never upscales. The thumbnail is generated
+from the retained photo; stereo and 360 settings affect only its preview.
+The source is deleted **only after** the master and thumbnail successfully encode,
+decode for verification, and the SQL metadata update succeeds. Failures retain
+the source and report `thumbnail_error`. Animated sources requiring conversion
+are retained with a processing error rather than silently reduced to a still.
+An interrupted publication is recovered on the next scan using `.photo-jobs`.
+Existing IDs, descriptions, favorites, and cover selections survive conversion.
+A processing marker prevents repeated lossy conversion, including forced rescans.
+
+HEIC/HEIF decoding uses libheif to assemble the full image grid and apply its
+crop/rotation/mirror transforms before resizing. FFmpeg's first video stream can
+be just one HEVC tile and is never used as a HEIC fallback. A missing HEIF decoder
+or a container with multiple top-level images keeps the original with a processing
+error instead of publishing an arbitrary image.
+
+To repair photos processed by the older HEIC decoder, restore the original HEIC
+under its original filename and rescan, or upload that original again. This repair
+exception to duplicate-name protection preserves the existing media ID, description,
+favorites and cover selection. Completed repairs restore normal duplicate protection.
+Without the original, scanning reports `thumbnail_status=error` and a
+`thumbnail_error` requesting that source; a tile-only JXL cannot reconstruct the
+missing image. The retained JXL is left intact until a successful repair. HEIF
+decoder version 1 is recorded separately from the photo profile and invalidates
+older thumbnail/JPEG fallback caches.
+
+Photo and thumbnail URLs default to `format=auto`: clients explicitly advertising
+`Accept: image/jxl` receive JXL; other clients receive a JPEG fallback generated
+on first use and cached in `.fallbacks`. JPEG uses quality 90 and a white background
+for transparency. HEIC/TIFF/BMP also get JPEG fallbacks in auto mode. Responses
+include `Vary: Accept` and representation-specific ETags. `format=original` forces
+the retained bytes; `format=jpeg` forces a JPEG photo representation. These options
+apply equally to trip assets and thumbnails. Metadata `content_type` describes
+the retained file; HTTP `Content-Type` describes the selected response.
+
+The frontend can simply use the returned URLs. For explicit `<picture>` selection,
+use the returned URL with `format=original` on a `source type="image/jxl"` and
+`format=jpeg` on its fallback `img` (preserve the existing `v` query parameter on
+thumbnail URLs). `media/status` exposes photo byte/resolution thresholds alongside
+the existing video thumbnail limit.
 
 Use `description` to explain what a photo or video shows. It accepts up to 8192
 UTF-8 bytes and defaults to an empty string. Edit it through the media PATCH
@@ -928,9 +1044,10 @@ For a stitched equirectangular export without spherical metadata, set
 thumbnail, and rescans preserve explicit overrides. Existing media previously
 stored with `flat` keeps that setting until updated through PATCH.
 
-Equirectangular 360 media gets a **640x360 perspective thumbnail**, using FFmpeg's
+Equirectangular 360 video gets a **640x360 perspective thumbnail**, using FFmpeg's
 [v360 filter](https://ffmpeg.org/ffmpeg-filters.html#v360), for a normal preview in
-the frontend. Other projection formats keep a scaled decoded frame. Stereo layout
+the frontend. Photo perspective previews target a 480-pixel shorter side without
+upscaling. Other projection formats keep a scaled decoded frame. Stereo layout
 fields remain optional for stereoscopic footage; ordinary 360 video needs no stereo
 setting. Originals are served with byte ranges for the frontend's 360 player.
 The server does not stitch raw camera footage or convert playback formats.
@@ -939,7 +1056,8 @@ MP4/MOV export from your camera software. Raw `.insv`/`.360` files are retained 
 served, with preview availability depending on FFmpeg's support for that format.
 
 The `dive_media` table stores metadata only. Back up **both the database and assets
-directory** to retain your originals. Removing an attachment through the API deletes
+directory** to retain your media. Photo conversion replaces eligible originals
+with the retained JXL; keep a separate source backup if desired. Removing an attachment through the API deletes
 its files; deleting an entire dive from SQL cascades its media metadata but leaves
 the originals available for a later reimport.
 

@@ -60,6 +60,7 @@ func newAPIHandler(store *sqlStore, logger *charmLog.Logger) http.Handler {
 	server.registerTranslationRoutes(mux)
 	server.registerTravelRoutes(mux)
 	server.registerCountryAdminRoutes(mux)
+	server.registerFITAdminRoutes(mux)
 	mux.HandleFunc("GET /api/v1/health", server.health)
 	mux.HandleFunc("GET /api/v1/dives", server.listDives)
 	mux.HandleFunc("GET /api/v1/dives/years", server.listDiveYears)

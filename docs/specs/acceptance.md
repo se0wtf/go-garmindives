@@ -126,7 +126,7 @@ Admin review coverage is in [country issue tests](../../internal/app/country_iss
 
 | ID | Fixture / change | Expected |
 | --- | --- | --- |
-| D01 | One complete multipart photo/video upload | 201, original name/bytes intact, metadata and owner-relative URLs returned |
+| D01 | One complete multipart photo/video upload | 201, photo profile applied or source retained on failure, video bytes unchanged; owner-relative URLs returned |
 | D02 | Duplicate owner filename, including unindexed on-disk file | 409, no overwrite; same name under another owner allowed |
 | D03 | Empty/oversized/extra multipart part, invalid filename | Reject before publishing; clean temporary files |
 | D04 | Direct file copy then scan/startup | Index known owners; log counts; unknown owner untouched for later |
@@ -147,13 +147,52 @@ Admin review coverage is in [country issue tests](../../internal/app/country_iss
 | D19 | Multi-batch content; later batch transient failure | Successful segments persist, only missing segments retried; 50/120KiB limits enforced |
 | D20 | Provider quota/auth failure / retry | Pause, fallback French, explicit retry preserves ready progress; no automatic subscription upgrade |
 | D21 | Sync process adds new text while serve runs | Background reconciliation eventually discovers it (~30-second scan, plus paced queue delay) |
-| D22 | Backend restarts with originals/FIT/media/overrides/cache | User edits and original bytes survive; reusable thumbnails and ready translations reused |
+| D22 | Backend restarts with retained media/FIT/overrides/cache | User edits and retained bytes survive; reusable thumbnails and ready translations reused |
+| D23 | Photo below both strict thresholds vs exactly 2048 shorter side or at least 1,000,000 bytes | Keep small source; otherwise JXL 1080 shorter side at d=1.5/e=7; JXL thumbnail 480 at d=2/e=8; no upscaling |
+| D24 | Encoder/thumbnail/SQL failure during photo conversion | Source bytes retained; SQL failure rolls back publication; metadata and covers remain consistent |
+| D25 | Interrupted publication before vs after SQL commit, including in-place JXL | Startup rolls back uncommitted target/restores backup, or completes committed cleanup; changed source bytes retained |
+| D26 | Forced rescan or missing-thumbnail repair | Retained photo SHA/ID/editorial fields unchanged; no repeated master encoding |
+| D27 | JXL supported, wildcard Accept, or explicit q=0; format override | Correct native/JPEG selection, Vary: Accept for auto, distinct ETags; format=original/jpeg respected |
+| D28 | Repeat fallback/conditional GET, HEAD, media deletion | Cached JPEG reused, 304/HEAD have no body, deletion clears corresponding fallback caches |
+| D29 | New small photo copied under converted original-name alias | Same media ID, small bytes retained, obsolete JXL retired after SQL commit; subsequent scan creates no duplicate |
+| D30 | Tiled/rotated HEIC | Inspect complete oriented dimensions; all quadrants remain in 1080 master, 480 thumbnail and JPEG fallback; never select one HEVC tile |
+| D31 | Restore/re-upload identical original after legacy HEIC conversion | Reprocess instead of deleting as unchanged; preserve ID/editorial fields/favorites/cover; missing source reports error and leaves old JXL intact |
+| D32 | Small legacy HEIC with old thumbnail/JPEG cache | Source bytes retained; decoder-version keys force complete-image previews and JPEG fallback |
+| D33 | Missing HEIF tool/codec or multiple top-level images | Retain source and report processing error; no FFmpeg first-tile fallback or arbitrary output selection |
+| D34 | Interrupted legacy HEIC publication with source present | Recovery retains that source for the corrected decoder rather than finishing deletion |
 
 Reference evidence: [media](../../internal/app/media_test.go), [descriptions](../../internal/app/media_description_test.go),
 [360](../../internal/app/media_360_test.go), [cover](../../internal/app/cover_test.go), [trip media/favorites](../../internal/app/trip_media_test.go),
 [translations](../../internal/app/translations_test.go).
+Photo profile and recovery evidence: [photo lifecycle](../../internal/app/media_photo_test.go),
+[publication recovery](../../internal/app/media_photo_jobs_test.go),
+[real JPEG XL encoding](../../internal/media/photo_test.go).
+HEIC evidence: [grid/orientation decoding](../../internal/media/photo_heif_test.go),
+[legacy repairs and cache replacement](../../internal/app/media_heif_test.go).
 
 ## API and migration verification
+
+Sample JSON must omit raw for anonymous and admin callers, even with
+include_raw=true. Large raw_json values stay stored internally without inflating
+responses or being selected by sample queries. Preserve every indexed reading,
+zero/missing distinctions, ordering and cursor pagination. Reference:
+[compact sample tests](../../internal/app/compact_samples_test.go), also exercised
+against PostgreSQL, and [authenticated privacy checks](../../internal/app/fit_download_test.go).
+
+Dive detail/list/sample JSON must not embed a full FIT document or original
+Base64 file bytes, for anonymous or authenticated callers, including include=fit.
+Large private fit_json data must not inflate detail responses or be selected by
+detail reads. Indexed graph measurements remain available. The only FIT download
+is GET /api/v1/admin/dives/{id}/fit: setup gating applies, GET/HEAD/ranges require
+a valid admin session, logout/revocation removes access, and no public alias exists.
+Verify exact single-file bytes, safe attachment filename, private/no-store cache,
+HEAD and ranges; multiple files download as a ZIP with safe distinct entry names
+and unchanged bytes. Missing files return 404 fit_unavailable, unknown dives
+404 not_found, invalid IDs 400, and checksum failures never return corrupt bytes.
+The download makes no Garmin request. Reference:
+[FIT API/download tests](../../internal/app/fit_download_test.go),
+[SQL FIT retention](../../internal/app/fit_store_test.go), and
+[PostgreSQL integration](../../internal/app/integration_test.go).
 
 `GET /api/v1/dives/years` is gated before setup and public afterward. An empty
 logbook returns items: []; multiple dives in one year produce a single numeric

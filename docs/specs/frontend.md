@@ -147,11 +147,28 @@ Dives sort newest first by local date, start time, and activity ID. Samples sort
 by ascending index. Use `elapsed_ms / 1000` for chart time and metres for depth;
 depth normally increases downward visually. Missing samples/measurements are gaps,
 not zeroes. Equal timestamps can occur; do not deduplicate by timestamp. Indexed
-samples are separate from the full FIT document and may require multiple pages.
+samples may require multiple pages. Dive JSON never includes a fit property,
+the full decoded FIT document, or original_base64, even when logged in as admin.
+Remove any raw-FIT JSON disclosure and do not request include=fit. Public chart
+measurements remain available through the samples endpoint.
+Sample items contain only the index, timestamps and extracted measurements;
+the raw property is omitted entirely, including for admins and include_raw=true.
+Read depth/temperature/heart-rate/decompression fields directly. Every sample
+and its existing index/order is retained; follow next_cursor to load the profile.
 Dive detail includes all of its own attachments. Trip detail includes all own
 attachments and the first 100 favorite dive attachments; `favorites_next_cursor`
 continues that favorite collection through `/api/v1/media/favorites?trip_id=...`.
 The dedicated owner-media collection endpoints support pagination when preferred.
+
+For an administrator-only “Download FIT” button, use
+**`GET /api/v1/admin/dives/{id}/fit`** with the session cookie. The response is an
+attachment containing original binary FIT bytes, or a ZIP if several files are
+stored. Use the filename from Content-Disposition; a same-origin download link
+can let the browser handle it. If using fetch, read a Blob rather than JSON.
+Anonymous/expired sessions return 401; a dive without a stored original returns
+404 fit_unavailable. Keep this control in the authenticated admin interface.
+The route also protects HEAD/range requests and uses private, no-store caching.
+It reads cached SQL files and never triggers a Garmin download.
 
 ## Admin country-correction workflow
 
@@ -235,6 +252,32 @@ the configured upload size. Direct filesystem imports need an explicit scan.
 Use server-provided `url` and `thumbnail_url`; do not reconstruct paths from
 unescaped filenames. Use thumbnail only when available. A failed thumbnail can
 fall back to original for supported photos or a placeholder/download for video.
+Photo upload and scan can replace the source with JXL and change its filename
+and URL (for example `reef.jpg.jxl`), while keeping ID, description, favorites and
+cover selections. Use the returned metadata after processing. Videos and photos
+below both size thresholds keep their original bytes.
+
+Photo thumbnails are JXL with a target 480-pixel shorter side; video thumbnails
+are JPEG up to 640x640. The returned URLs default to automatic negotiation:
+explicit `Accept: image/jxl` selects JXL, otherwise a cached JPEG fallback is served.
+No frontend conversion or capability check is required. `content_type` describes
+the retained file; use the HTTP response Content-Type when downloading/rendering
+fetched bytes. Auto responses vary by Accept and use separate ETags per format.
+If using `<picture>`, set a `source type="image/jxl"` URL with `format=original`
+and an `img` fallback URL with `format=jpeg`. Add query parameters with the URL
+API so existing thumbnail `v` parameters survive. Explicit `format=original`
+also provides a download of the retained file (the pre-conversion source is deleted
+after successful processing). These rules apply to dive/trip media and cover URLs.
+
+An earlier HEIC tile conversion can report `thumbnail_status: "error"` with a
+`thumbnail_error` asking for the original HEIC. Show that explanation to the admin.
+Re-uploading the same original filename repairs this specific case while retaining
+the existing media ID, description, favorite and cover. Upsert that returned ID
+instead of appending a duplicate gallery item. Normal duplicate uploads still
+return 409 after successful repair. An original copied directly into the owner
+directory can instead be repaired by an admin rescan. Missing pixels cannot be
+recovered from a previously truncated JXL alone.
+
 A video player chooses flat/180/360 based on `effective_projection`, respecting
 `projection_format` and optional stereo layout. Do not infer 360 from a filename.
 Original URLs support range seeking. No transcoded streaming manifest is supplied.

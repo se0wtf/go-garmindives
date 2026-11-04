@@ -89,6 +89,9 @@ func (m *mediaItem) setURLs() {
 func (m *mediaItem) resolveProjection() {
 	m.EffectiveProjection, m.ProjectionFormat = m.Projection, ""
 	probe, err := mediaproc.DecodeProbe(m.Probe)
+	if photo := m.photoState(); photo.Version == photoProfileVersion && photo.Projection != "" {
+		probe.Projection, probe.ProjectionFormat = photo.Projection, photo.ProjectionFormat
+	}
 	if err == nil {
 		m.ProjectionFormat = probe.ProjectionFormat
 	}
@@ -168,7 +171,7 @@ func (s *sqlStore) saveMedia(ctx context.Context, m mediaItem) error {
 	owner := m.owner()
 	_, err := s.db.ExecContext(ctx, s.bind(`INSERT INTO `+owner.table()+` (`+owner.columns()+`)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT (`+owner.column()+`, filename) DO UPDATE SET kind=excluded.kind,
+		ON CONFLICT (id) DO UPDATE SET filename=excluded.filename, kind=excluded.kind,
 		content_type=excluded.content_type, size_bytes=excluded.size_bytes, modified_ns=excluded.modified_ns,
 		sha256=excluded.sha256, width=excluded.width, height=excluded.height,
 		duration_seconds=excluded.duration_seconds, stereo_layout=excluded.stereo_layout,

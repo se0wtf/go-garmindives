@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/color"
 	"image/jpeg"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -112,6 +113,11 @@ func TestMediaFFmpeg360PerspectiveThumbnailPreservesOriginal(t *testing.T) {
 	if p.FFmpeg == "" || p.FFprobe == "" {
 		t.Skip("install FFmpeg for the 360-degree perspective preview test")
 	}
+	for _, tool := range []string{"cjxl", "djxl"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skip("install JPEG XL tools for real photo tests")
+		}
+	}
 	l, _ := mediaTestLibrary(t)
 	l.processor = p
 	panorama := image.NewRGBA(image.Rect(0, 0, 800, 400))
@@ -141,15 +147,12 @@ func TestMediaFFmpeg360PerspectiveThumbnailPreservesOriginal(t *testing.T) {
 	if err != nil || m.ThumbnailStatus != "ready" || m.ThumbnailURL == oldURL || m.EffectiveProjection != "360" {
 		t.Fatalf("360 perspective preview = %+v, %v", m, err)
 	}
-	thumbnail, err := l.root.ReadFile(".thumbnails/" + m.ThumbnailKey + ".jpg")
+	thumbnail := mediaRequest(t, newAPIHandler(l.store, testLogger(t)), "GET", m.ThumbnailURL, nil, "")
+	preview, err := jpeg.Decode(thumbnail.Body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	preview, err := jpeg.Decode(bytes.NewReader(thumbnail))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if preview.Bounds().Dx() != 640 || preview.Bounds().Dy() != 360 {
+	if preview.Bounds().Dx() != 711 || preview.Bounds().Dy() != 400 {
 		t.Fatalf("perspective preview dimensions = %v", preview.Bounds())
 	}
 	for _, x := range []int{20, 320, 620} {

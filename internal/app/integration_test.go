@@ -88,7 +88,7 @@ func TestGarminPersonalDiveIntegration(t *testing.T) {
 			withDepth++
 		}
 	}
-	if withDepth == 0 || string(detail.FIT) == "null" {
+	if withDepth == 0 || string(storedFITJSON(t, store, dives[0].ID)) == "null" {
 		t.Fatal("live dive FIT did not produce a depth-over-time profile")
 	}
 	t.Logf("verified Personal API FIT decoding, %d depth samples, SQLite output, and incremental synchronization", withDepth)
@@ -338,5 +338,14 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	})
 	t.Run("trip rating filters", func(t *testing.T) {
 		exerciseTripRatingFilters(t, store)
+	})
+	t.Run("original FIT download", func(t *testing.T) {
+		exerciseFITArchiveDownload(t, store, newAPIHandler(store, testLogger(t)), nil)
+	})
+	t.Run("compact samples", func(t *testing.T) {
+		exerciseCompactSamples(t, store)
+	})
+	t.Run("photo SQL conversion", func(t *testing.T) {
+		exercisePhotoSQLConversion(t, store)
 	})
 }

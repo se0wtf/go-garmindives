@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -29,13 +30,14 @@ var (
 )
 
 type mediaLibrary struct {
-	store     *sqlStore
-	root      *os.Root
-	directory string
-	maxUpload int64
-	processor mediaproc.Processor
-	logger    *charmLog.Logger
-	gate      chan struct{}
+	store        *sqlStore
+	root         *os.Root
+	directory    string
+	maxUpload    int64
+	processor    mediaproc.Processor
+	logger       *charmLog.Logger
+	gate         chan struct{}
+	fallbackGate chan struct{}
 }
 
 type mediaScanResult struct {
@@ -63,7 +65,7 @@ func openMediaLibrary(store *sqlStore, directory string, maxUpload int64, logger
 	if err != nil {
 		return nil, err
 	}
-	for _, path := range []string{".thumbnails", ".uploads"} {
+	for _, path := range []string{".thumbnails", ".uploads", ".fallbacks", ".photo-jobs"} {
 		if err := root.MkdirAll(path, 0o700); err != nil {
 			root.Close()
 			return nil, err
@@ -73,8 +75,18 @@ func openMediaLibrary(store *sqlStore, directory string, maxUpload int64, logger
 	if logger != nil && (processor.FFmpeg == "" || processor.FFprobe == "") {
 		logger.Warn("media thumbnails need ffmpeg and ffprobe; install FFmpeg and rescan", "assets_dir", directory)
 	}
+	if logger != nil && processor.HEIF == "" {
+		logger.Warn("HEIC photos need heif-convert/heif-dec and an HEVC decoder; install libheif/libheif-tools and rescan")
+	}
+	if logger != nil {
+		for _, tool := range []string{"cjxl", "djxl"} {
+			if _, err := exec.LookPath(tool); err != nil {
+				logger.Warn("photo processing needs JPEG XL tools; install jpeg-xl/libjxl-tools and rescan", "tool", tool)
+			}
+		}
+	}
 	return &mediaLibrary{store: store, root: root, directory: directory, maxUpload: maxUpload,
-		processor: processor, logger: logger, gate: make(chan struct{}, 1)}, nil
+		processor: processor, logger: logger, gate: make(chan struct{}, 1), fallbackGate: make(chan struct{}, 1)}, nil
 }
 
 func (l *mediaLibrary) Close() error { return l.root.Close() }
@@ -119,6 +131,8 @@ func mediaType(name string) (kind, contentType string) {
 		return "photo", "image/heic"
 	case ".avif":
 		return "photo", "image/avif"
+	case ".jxl":
+		return "photo", "image/jxl"
 	case ".tif", ".tiff":
 		return "photo", "image/tiff"
 	case ".bmp":
@@ -169,6 +183,9 @@ func (l *mediaLibrary) Scan(ctx context.Context, force bool) (result mediaScanRe
 		return result, err
 	}
 	defer l.unlock()
+	if err := l.recoverPhotoJobs(ctx); err != nil {
+		return result, err
+	}
 	started := time.Now()
 	if l.logger != nil {
 		l.logger.Info("scanning media assets", "assets_dir", l.directory, "force", force)
@@ -251,11 +268,16 @@ func (l *mediaLibrary) Scan(ctx context.Context, force bool) (result mediaScanRe
 			}
 		}
 		seen := make(map[string]bool, len(files))
+		seenIDs := make(map[string]bool, len(files))
 		for _, entry := range files {
 			name := entry.Name()
 			kind, _ := mediaType(name)
 			if !validMediaFilename(name) || kind == "" || !entry.Type().IsRegular() {
 				result.Skipped++
+				continue
+			}
+			// Processing an earlier source may have retired its previous master.
+			if _, err := l.root.Lstat(owner.path(name)); errors.Is(err, fs.ErrNotExist) {
 				continue
 			}
 			seen[name] = true
@@ -269,6 +291,8 @@ func (l *mediaLibrary) Scan(ctx context.Context, force bool) (result mediaScanRe
 				l.logFile("could not index media", mediaItem{DiveID: owner.DiveID, TripID: owner.TripID, Filename: name}, err)
 				continue
 			}
+			seen[m.Filename] = true
+			seenIDs[m.ID] = true
 			switch action {
 			case "added":
 				result.Added++
@@ -282,7 +306,7 @@ func (l *mediaLibrary) Scan(ctx context.Context, force bool) (result mediaScanRe
 			}
 		}
 		for _, item := range old {
-			if !seen[item.Filename] {
+			if !seen[item.Filename] && !seenIDs[item.ID] {
 				if err := l.store.removeMedia(ctx, item); err != nil {
 					return result, err
 				}
@@ -292,7 +316,7 @@ func (l *mediaLibrary) Scan(ctx context.Context, force bool) (result mediaScanRe
 			}
 		}
 	}
-	return result, nil
+	return result, l.recoverPhotoJobs(ctx)
 }
 
 type mediaContextReader struct {
@@ -311,7 +335,7 @@ func (l *mediaLibrary) indexFile(ctx context.Context, id int64, name string, for
 	return l.indexOwnedFile(ctx, mediaOwner{DiveID: id}, name, force)
 }
 func (l *mediaLibrary) indexOwnedFile(ctx context.Context, owner mediaOwner, name string, force bool) (mediaItem, string, error) {
-	m, err := l.store.ownedMediaByFilename(ctx, owner, name)
+	m, err := l.lookupPhotoAlias(ctx, owner, name)
 	fresh := errors.Is(err, errMediaNotFound)
 	if err != nil && !fresh {
 		return m, "", err
@@ -329,9 +353,15 @@ func (l *mediaLibrary) indexOwnedFile(ctx context.Context, owner mediaOwner, nam
 	if !info.Mode().IsRegular() || info.Size() == 0 {
 		return m, "", errors.New("media must be a nonempty regular file")
 	}
-	_, thumbErr := l.root.Stat(".thumbnails/" + m.ThumbnailKey + ".jpg")
-	if !fresh && !force && m.SizeBytes == info.Size() && m.ModifiedNS == info.ModTime().UnixNano() && m.ThumbnailStatus == "ready" && m.ThumbnailKey == m.thumbnailKey() && thumbErr == nil {
+	_, photoProcessor := l.processor.(mediaproc.PhotoProcessor)
+	kind, _ := mediaType(name)
+	needsPhoto := kind == "photo" && photoProcessor && (m.photoState().Version != photoProfileVersion || m.needsHEIFRepair())
+	_, thumbErr := l.root.Stat(m.thumbnailPath())
+	if !fresh && name == m.Filename && !needsPhoto && !force && m.SizeBytes == info.Size() && m.ModifiedNS == info.ModTime().UnixNano() && m.ThumbnailStatus == "ready" && m.ThumbnailKey == m.thumbnailKey() && thumbErr == nil {
 		return m, "unchanged", nil
+	}
+	if kind == "photo" && photoProcessor {
+		return l.indexPhoto(ctx, owner, name, input, info, m, fresh)
 	}
 	hash := sha256.New()
 	if _, err := io.Copy(hash, mediaContextReader{ctx: ctx, r: input}); err != nil {
@@ -389,6 +419,9 @@ func (l *mediaLibrary) indexOwnedFile(ctx context.Context, owner mediaOwner, nam
 }
 
 func (l *mediaLibrary) makeThumbnail(ctx context.Context, input *os.File, m *mediaItem) error {
+	if m.photoState().Version == photoProfileVersion {
+		return l.makePhotoThumbnail(ctx, input, m)
+	}
 	m.resolveProjection()
 	layout := m.StereoLayout
 	if layout == "auto" {
@@ -425,13 +458,21 @@ func (m mediaItem) thumbnailKey() string {
 		layout = m.DetectedStereoLayout
 	}
 	key := sha256.Sum256([]byte("v2:" + m.ID + ":" + m.SHA256 + ":" + layout + ":" + m.EffectiveProjection + ":" + m.ProjectionFormat))
+	if m.photoState().Version == photoProfileVersion {
+		profile := "photo-jxl-v1:"
+		if m.photoState().HEIFDecoderVersion >= 1 {
+			profile += "heif-primary-v1:"
+		}
+		key = sha256.Sum256([]byte(profile + m.ID + ":" + m.SHA256 + ":" + layout + ":" + m.EffectiveProjection + ":" + m.ProjectionFormat))
+	}
 	return hex.EncodeToString(key[:])
 }
 
 func (l *mediaLibrary) removeThumbnail(m mediaItem) {
 	if m.ThumbnailKey != "" {
-		_ = l.root.Remove(".thumbnails/" + m.ThumbnailKey + ".jpg")
+		_ = l.root.Remove(m.thumbnailPath())
 	}
+	l.removePhotoFallbacks(m)
 }
 
 // validateEnd verifies the multipart trailer before publishing a staged file.
@@ -474,6 +515,14 @@ func (l *mediaLibrary) uploadOwned(ctx context.Context, owner mediaOwner, name s
 		return mediaItem{}, err
 	}
 	defer l.unlock()
+	if existing, err := l.lookupPhotoAlias(ctx, owner, name); err == nil {
+		// Repair legacy HEIC conversions without discarding IDs or editorial data.
+		if existing.Filename == name || !existing.needsHEIFRepair() {
+			return mediaItem{}, errMediaConflict
+		}
+	} else if !errors.Is(err, errMediaNotFound) {
+		return mediaItem{}, err
+	}
 	exists, err := l.store.ownerExists(ctx, owner)
 	if err != nil {
 		return mediaItem{}, err
@@ -498,7 +547,9 @@ func (l *mediaLibrary) uploadOwned(ctx context.Context, owner mediaOwner, name s
 	}
 	m, _, err := l.indexOwnedFile(ctx, owner, name, true)
 	if err != nil {
-		_ = l.root.Remove(target)
+		if kind, _ := mediaType(name); kind != "photo" {
+			_ = l.root.Remove(target)
+		}
 		return mediaItem{}, err
 	}
 	return m, nil

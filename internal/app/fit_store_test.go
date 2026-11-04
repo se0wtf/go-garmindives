@@ -18,6 +18,15 @@ import (
 	fitdata "github.com/se0wtf/go-garmindives/internal/fit"
 )
 
+func storedFITJSON(t *testing.T, store *sqlStore, id int64) json.RawMessage {
+	t.Helper()
+	var raw string
+	if err := store.db.QueryRowContext(context.Background(), store.bind(`SELECT fit_json FROM dives WHERE id=?`), id).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	return json.RawMessage(raw)
+}
+
 func TestFITBlobRoundTripAndOfflineDecode(t *testing.T) {
 	ctx := context.Background()
 	body := testFIT(t)

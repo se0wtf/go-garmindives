@@ -162,8 +162,8 @@ func TestPersonalAPISync(t *testing.T) {
 			detail, _ := getJSON[diveDetail](t, api.URL+"/api/v1/dives/42", http.StatusOK)
 			want, _ := rawDocument(fixture)
 			got, err := rawDocument(detail.DiveDetails)
-			if err != nil || !reflect.DeepEqual(got, want) || string(detail.ActivityDetails) != "null" || len(detail.RecordMetadata) == 0 || len(detail.Alerts) != 1 || string(detail.FIT) == "null" {
-				t.Fatal("REST API lost Personal API documents or decoded FIT data")
+			if err != nil || !reflect.DeepEqual(got, want) || string(detail.ActivityDetails) != "null" || len(detail.RecordMetadata) == 0 || len(detail.Alerts) != 1 {
+				t.Fatal("REST API lost Personal API documents or indexed profile metadata")
 			}
 			samples, _ := getJSON[sampleListResponse](t, api.URL+"/api/v1/dives/42/samples", http.StatusOK)
 			if len(samples.Items) != 3 || samples.Items[0].DepthMeters == nil || *samples.Items[0].DepthMeters != 0 || samples.Items[1].DepthMeters == nil || *samples.Items[1].DepthMeters != 1.586 || samples.Items[1].ElapsedMS != 1000 || samples.Items[2].DepthMeters != nil {

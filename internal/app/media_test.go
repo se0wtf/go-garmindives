@@ -527,6 +527,11 @@ func TestMediaFFmpegPhotoVideoAndStereoThumbnails(t *testing.T) {
 	if processor.FFmpeg == "" || processor.FFprobe == "" {
 		t.Skip("install FFmpeg for real photo/video thumbnail tests")
 	}
+	for _, tool := range []string{"cjxl", "djxl"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skip("install JPEG XL tools for real photo tests")
+		}
+	}
 	l, _ := mediaTestLibrary(t)
 	l.processor = processor
 	photo := image.NewRGBA(image.Rect(0, 0, 800, 400))
@@ -553,15 +558,12 @@ func TestMediaFFmpegPhotoVideoAndStereoThumbnails(t *testing.T) {
 	if err != nil || m.ThumbnailStatus != "ready" {
 		t.Fatalf("stereo thumbnail = %+v, %v", m, err)
 	}
-	thumb, err := l.root.ReadFile(".thumbnails/" + m.ThumbnailKey + ".jpg")
-	if err != nil {
-		t.Fatal(err)
-	}
-	decoded, err := jpeg.Decode(bytes.NewReader(thumb))
-	if err != nil || decoded.Bounds().Dx() != 640 || decoded.Bounds().Dy() != 640 {
+	thumb := mediaRequest(t, newAPIHandler(l.store, testLogger(t)), "GET", m.ThumbnailURL, nil, "")
+	decoded, err := jpeg.Decode(thumb.Body)
+	if err != nil || decoded.Bounds().Dx() != 400 || decoded.Bounds().Dy() != 400 {
 		t.Fatalf("single-eye dimensions = %v, %v", decoded, err)
 	}
-	r, _, b, _ := decoded.At(320, 320).RGBA()
+	r, _, b, _ := decoded.At(200, 200).RGBA()
 	if r <= b {
 		t.Fatal("stereo thumbnail did not select the left eye")
 	}

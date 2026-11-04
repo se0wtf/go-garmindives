@@ -116,7 +116,7 @@ func TestTravelMigrationPreservesExistingDiveFITAndMedia(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(detail.FIT) != originalFIT || detail.Dive.CoverPhoto == nil || detail.Dive.CoverPhoto.ID != "photo" || len(detail.Media) != 1 || detail.Media[0].Description != "Un requin" || detail.Media[0].Favorite {
+	if string(storedFITJSON(t, reopened, 42)) != originalFIT || detail.Dive.CoverPhoto == nil || detail.Dive.CoverPhoto.ID != "photo" || len(detail.Media) != 1 || detail.Media[0].Description != "Un requin" || detail.Media[0].Favorite {
 		t.Fatal("migration changed existing FIT/media/cover metadata")
 	}
 	newFiles, err := reopened.FITFiles(ctx, 42)

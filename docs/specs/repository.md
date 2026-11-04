@@ -8,6 +8,7 @@ Root `main.go` creates logging/signal handling and calls `internal/app.Run`.
 
 ```text
 main.go                         executable entry point
+Dockerfile / .dockerignore       non-root serve/sync image and restricted build inputs
 config.example.yaml             operator-facing settings example
 README.md / SPECS.md             usage and specification entry points
 internal/
@@ -27,7 +28,7 @@ internal/
   fit/                          FIT containers, decoder and lossless document types
   garminhttp/                    Garmin request pacing/retries and focused tests
   geocoding/                     Nominatim configuration and HTTP adapter
-  media/                         FFprobe inspection and FFmpeg thumbnails
+  media/                         FFprobe/FFmpeg, full-image HEIF decoding, and JPEG XL processing
   notes/                         pure French note parser
   security/                      administrator password policy and Argon2id
   translation/                   DeepL configuration and HTTP adapter

@@ -80,8 +80,11 @@ switching the running connection or copy any data. Other YAML properties are
 currently managed by file/ENV/flags, not by this PATCH endpoint.
 
 Every `/api/v1/admin/` route is also private for GET/HEAD. The missing-country
-review list uses this boundary; public country catalogs and ordinary dive reads
-remain available without login after setup.
+review list and original FIT download use this boundary, including byte-range
+requests. FIT downloads use private, no-store caching and attachment disposition;
+FIT file bytes/full decoded documents are never embedded in JSON responses,
+even for administrators. Public country catalogs and ordinary dive reads remain
+available without login after setup.
 
 ## Setup and startup state machine
 

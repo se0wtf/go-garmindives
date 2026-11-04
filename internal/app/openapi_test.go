@@ -17,7 +17,6 @@ import (
 	apidocs "github.com/se0wtf/go-garmindives/docs"
 	appconfig "github.com/se0wtf/go-garmindives/internal/config"
 	countrydata "github.com/se0wtf/go-garmindives/internal/country"
-	fitdata "github.com/se0wtf/go-garmindives/internal/fit"
 	httpx "github.com/se0wtf/go-garmindives/internal/httpx"
 )
 
@@ -69,7 +68,7 @@ func TestOpenAPIDocumentsEveryAPIRoute(t *testing.T) {
 	routes := map[string]bool{}
 	// Read actual route registration, so new endpoints cannot silently be left
 	// out of the frontend contract. Documentation/static UI routes are excluded.
-	for _, filename := range []string{"http.go", "http_media.go", "http_translations.go", "http_travel.go", "application.go", "http_auth.go", "http_admin_countries.go"} {
+	for _, filename := range []string{"http.go", "http_media.go", "http_translations.go", "http_travel.go", "application.go", "http_auth.go", "http_admin_countries.go", "http_admin_fit.go"} {
 		file, err := parser.ParseFile(token.NewFileSet(), filename, nil, 0)
 		if err != nil {
 			t.Fatal(err)
@@ -171,8 +170,7 @@ func TestOpenAPISchemasMatchResponseFields(t *testing.T) {
 		"RecordMetadata": recordMetadata{}, "DiveSample": diveSampleAPIResponse{},
 		"DiveList": diveListResponse{}, "DiveYears": diveYearsResponse{}, "SampleList": sampleListResponse{},
 		"MediaItem": mediaItem{}, "MediaList": mediaListResponse{}, "MediaScanResult": mediaScanResult{},
-		"FITDocument": fitdata.Document{}, "FITFile": fitdata.File{}, "FITSequence": fitdata.Sequence{},
-		"FITMessage": fitdata.Message{}, "FITField": fitdata.Field{}, "ErrorResponse": httpx.ErrorResponse{},
+		"ErrorResponse":  httpx.ErrorResponse{},
 		"DiveCoverPhoto": diveCoverPhoto{},
 		"Translations":   translations{}, "EnglishTranslation": englishTranslation{}, "TranslationStatus": translationStatus{},
 		"Country": countrydata.Country{}, "HomeCountry": homeCountry{}, "DiveTrip": diveTrip{}, "TripList": tripListResponse{}, "TripDetail": tripDetail{}, "CountryLookupStatus": countryLookupStatus{},

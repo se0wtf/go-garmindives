@@ -37,12 +37,13 @@ type Processor interface {
 
 type ffmpegProcessor struct {
 	FFmpeg, FFprobe string
+	HEIF            string
 }
 
 func NewProcessor() *ffmpegProcessor {
 	ffmpeg, _ := exec.LookPath("ffmpeg")
 	ffprobe, _ := exec.LookPath("ffprobe")
-	return &ffmpegProcessor{FFmpeg: ffmpeg, FFprobe: ffprobe}
+	return &ffmpegProcessor{FFmpeg: ffmpeg, FFprobe: ffprobe, HEIF: findHEIFDecoder()}
 }
 
 // External tools receive an already opened file, confined by os.Root. The seekable
@@ -70,6 +71,12 @@ func (b *boundedOutput) Write(p []byte) (int, error) {
 }
 
 func (p *ffmpegProcessor) Inspect(ctx context.Context, input *os.File) (Probe, error) {
+	if IsJPEGXL(input) {
+		return p.inspectJPEGXL(ctx, input)
+	}
+	if IsHEIF(input) {
+		return p.inspectHEIF(ctx, input)
+	}
 	ffprobe := p.FFprobe
 	if ffprobe == "" {
 		ffprobe, _ = exec.LookPath("ffprobe")

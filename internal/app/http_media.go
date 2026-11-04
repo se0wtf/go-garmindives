@@ -264,8 +264,12 @@ func (s *apiServer) serveMediaFile(w http.ResponseWriter, r *http.Request, m med
 	path, contentType, etag := m.owner().path(m.Filename), m.ContentType, m.SHA256
 	name := m.Filename
 	if thumbnail {
-		path, contentType, etag = ".thumbnails/"+m.ThumbnailKey+".jpg", "image/jpeg", m.ThumbnailKey
+		path, contentType, etag = m.thumbnailPath(), "image/jpeg", m.ThumbnailKey
 		name += ".thumbnail.jpg"
+		if m.photoState().Version == photoProfileVersion {
+			contentType = "image/jxl"
+			name = m.Filename + ".thumbnail.jxl"
+		}
 	}
 	file, err := s.store.media.root.Open(path)
 	if err != nil {
@@ -285,6 +289,40 @@ func (s *apiServer) serveMediaFile(w http.ResponseWriter, r *http.Request, m med
 	if !thumbnail && (info.Size() != m.SizeBytes || info.ModTime().UnixNano() != m.ModifiedNS) {
 		httpx.WriteAPIError(w, http.StatusConflict, "media_changed", "file changed on disk; rescan the assets directory")
 		return
+	}
+	format := r.URL.Query().Get("format")
+	if format != "" && format != "auto" && format != "original" && format != "jpeg" {
+		httpx.WriteAPIError(w, 400, "invalid_request", "format must be auto, original, or jpeg")
+		return
+	}
+	if m.Kind == "photo" {
+		if format == "" || format == "auto" {
+			w.Header().Add("Vary", "Accept")
+		}
+		if contentType != "image/jpeg" && (format == "jpeg" || (format != "original" && needsPhotoFallback(contentType, r.Header.Get("Accept")))) {
+			fallback, err := s.store.media.jpegFallback(r.Context(), file, photoFallbackSource(contentType, etag))
+			if err != nil {
+				s.internalError(w, r, err)
+				return
+			}
+			defer fallback.Close()
+			file = fallback
+			info, err = file.Stat()
+			if err != nil {
+				s.internalError(w, r, err)
+				return
+			}
+			etag, err = hashPhoto(r.Context(), file)
+			if err != nil {
+				s.internalError(w, r, err)
+				return
+			}
+			if _, err := file.Seek(0, 0); err != nil {
+				s.internalError(w, r, err)
+				return
+			}
+			contentType, name = "image/jpeg", name+".jpg"
+		}
 	}
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": name}))
@@ -324,7 +362,7 @@ func (s *apiServer) mediaStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"total": total, "photos": photos, "videos": videos,
 		"thumbnails_ready": ready, "thumbnails_failed": failed, "max_upload_bytes": s.store.media.maxUpload,
-		"thumbnail_max_dimension": 640})
+		"thumbnail_max_dimension": 640, "photo_thumbnail_small_side": 480, "photo_max_small_side": 1080, "photo_keep_below_bytes": photoKeepBytes, "photo_keep_below_small_side": 2048})
 }
 
 // Media bodies and full-file video responses need longer than the JSON API's

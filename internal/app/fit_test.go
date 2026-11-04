@@ -283,7 +283,7 @@ func TestFITSQLBackfillIsAtomicAndPreservesDocuments(t *testing.T) {
 		t.Fatal("invalid FIT backfill was accepted")
 	}
 	before, err := store.Dive(ctx, 42)
-	if err != nil || string(before.FIT) != "null" {
+	if err != nil || string(storedFITJSON(t, store, 42)) != "null" {
 		t.Fatalf("failed FIT backfill did not roll back: %v", err)
 	}
 	if files, err := store.FITFiles(ctx, 42); err != nil || len(files) != 0 {
@@ -293,7 +293,8 @@ func TestFITSQLBackfillIsAtomicAndPreservesDocuments(t *testing.T) {
 		t.Fatal(err)
 	}
 	after, err := store.Dive(ctx, 42)
-	if err != nil || !bytes.Equal(before.DiveDetails, after.DiveDetails) || before.Dive.Name != after.Dive.Name || !reflect.DeepEqual(before.Dive.MaxDepthMeters, after.Dive.MaxDepthMeters) || !json.Valid(after.FIT) || !strings.Contains(string(after.FIT), "original_base64") {
+	storedFIT := storedFITJSON(t, store, 42)
+	if err != nil || !bytes.Equal(before.DiveDetails, after.DiveDetails) || before.Dive.Name != after.Dive.Name || !reflect.DeepEqual(before.Dive.MaxDepthMeters, after.Dive.MaxDepthMeters) || !json.Valid(storedFIT) || !strings.Contains(string(storedFIT), "original_base64") {
 		t.Fatalf("FIT enrichment overwrote the stored summary/documents: %v", err)
 	}
 	samples, _, err := store.DiveSamples(ctx, 42, -1, 10)

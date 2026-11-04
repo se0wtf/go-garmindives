@@ -163,6 +163,7 @@ func TestRunRefreshKeepsFITMediaAndOtherDives(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	fitBefore := storedFITJSON(t, store, id)
 	other, err := store.Dive(context.Background(), 42)
 	if err != nil {
 		t.Fatal(err)
@@ -200,7 +201,7 @@ func TestRunRefreshKeepsFITMediaAndOtherDives(t *testing.T) {
 	if after.Dive.Rating == nil || *after.Dive.Rating != 4 || after.Dive.RatingMax == nil || *after.Dive.RatingMax != 5 || after.Dive.Comment != exampleDiveComment || len(after.Dive.Highlights) != 3 || after.Dive.Description != exampleDiveNote || after.Dive.Name != "Updated dive" {
 		t.Fatalf("fresh metadata was not parsed: %+v", after.Dive)
 	}
-	if !reflect.DeepEqual(before.FIT, after.FIT) || !reflect.DeepEqual(before.ActivityDetails, after.ActivityDetails) || !reflect.DeepEqual(before.Media, after.Media) || !reflect.DeepEqual(before.Dive.CoverPhoto, after.Dive.CoverPhoto) || !reflect.DeepEqual(before.Dive.MaxDepthMeters, after.Dive.MaxDepthMeters) {
+	if !reflect.DeepEqual(fitBefore, storedFITJSON(t, reopened, id)) || !reflect.DeepEqual(before.ActivityDetails, after.ActivityDetails) || !reflect.DeepEqual(before.Media, after.Media) || !reflect.DeepEqual(before.Dive.CoverPhoto, after.Dive.CoverPhoto) || !reflect.DeepEqual(before.Dive.MaxDepthMeters, after.Dive.MaxDepthMeters) {
 		t.Fatal("refresh replaced cached FIT, profile documents, measurements, media, or cover")
 	}
 	newSamples, _, err := reopened.DiveSamples(context.Background(), id, -1, 100)

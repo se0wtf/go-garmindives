@@ -5,7 +5,7 @@ diving logbook. It is intended both for an agent building the frontend and for a
 engineer implementing a compatible backend in another language.
 
 Baseline: backend commit `54aefed`, SQL schema **11**, application configuration
-version **1**, decoded FIT document version **1**, HTTP API `/api/v1`.
+version **1**, decoded FIT document version **1**, photo processing profile **1**, HTTP API `/api/v1`.
 These documents describe implemented behavior, not a proposed roadmap.
 
 ## Reading paths
@@ -47,7 +47,7 @@ flowchart LR
   Sync --> Garmin[Garmin API]
   Sync --> SQL[(SQLite or PostgreSQL)]
   Serve --> SQL
-  Serve --> Assets[(Original media + thumbnails)]
+  Serve --> Assets[(Retained media + thumbnails + fallbacks)]
   Serve --> Providers[DeepL / Nominatim]
   Config[Shared YAML + ENV] --> Serve
   Config --> Sync

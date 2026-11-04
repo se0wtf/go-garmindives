@@ -145,7 +145,7 @@ func TestInitialSetupGatesAPIsAndPreservesSQLData(t *testing.T) {
 		t.Fatal("setup did not activate the API")
 	}
 	detail := appJSON[diveDetail](t, a, "GET", "/api/v1/dives/42", nil, nil, 200)
-	if detail.Dive.ID != 42 || string(detail.FIT) == "null" {
+	if detail.Dive.ID != 42 {
 		t.Fatal("setup lost existing dive data")
 	}
 	runtime := waitApplicationReady(t, a)

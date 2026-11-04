@@ -296,7 +296,6 @@ type diveDetail struct {
 	Activity        json.RawMessage        `json:"activity"`
 	ActivityDetails json.RawMessage        `json:"activity_details"`
 	DiveDetails     json.RawMessage        `json:"dive_details"`
-	FIT             json.RawMessage        `json:"fit"`
 	RecordMetadata  []recordMetadata       `json:"record_metadata"`
 	Alerts          []diveAlertAPIResponse `json:"alerts"`
 	Media           []mediaItem            `json:"media"`
@@ -310,10 +309,10 @@ type diveAlertAPIResponse struct {
 }
 
 func (s *sqlStore) Dive(ctx context.Context, id int64) (diveDetail, error) {
-	row := s.db.QueryRowContext(ctx, s.bind(`SELECT `+diveSummaryColumns+`, dives.activity_json, dives.activity_details_json, dives.dive_details_json, dives.fit_json `+diveSummaryFrom+` WHERE dives.id = ?`), id)
+	row := s.db.QueryRowContext(ctx, s.bind(`SELECT `+diveSummaryColumns+`, dives.activity_json, dives.activity_details_json, dives.dive_details_json `+diveSummaryFrom+` WHERE dives.id = ?`), id)
 	var result diveDetail
-	var activity, activityDetails, diveDetails, fit string
-	item, err := scanDiveSummaryWithDocuments(row, &activity, &activityDetails, &diveDetails, &fit)
+	var activity, activityDetails, diveDetails string
+	item, err := scanDiveSummaryWithDocuments(row, &activity, &activityDetails, &diveDetails)
 	if errors.Is(err, sql.ErrNoRows) {
 		return diveDetail{}, errDiveNotFound
 	}
@@ -324,7 +323,6 @@ func (s *sqlStore) Dive(ctx context.Context, id int64) (diveDetail, error) {
 	result.Activity = json.RawMessage(activity)
 	result.ActivityDetails = json.RawMessage(activityDetails)
 	result.DiveDetails = json.RawMessage(diveDetails)
-	result.FIT = json.RawMessage(fit)
 	result.RecordMetadata = []recordMetadata{}
 	metadataRows, err := s.db.QueryContext(ctx, s.bind(`SELECT position, key FROM dive_record_metadata WHERE dive_id = ? ORDER BY position`), id)
 	if err != nil {
@@ -375,9 +373,9 @@ func (s *sqlStore) Dive(ctx context.Context, id int64) (diveDetail, error) {
 	return result, nil
 }
 
-func scanDiveSummaryWithDocuments(row rowScanner, activity, activityDetails, diveDetails, fit *string) (diveSummary, error) {
+func scanDiveSummaryWithDocuments(row rowScanner, activity, activityDetails, diveDetails *string) (diveSummary, error) {
 	values := newDiveSummaryScan()
-	err := row.Scan(values.targets(activity, activityDetails, diveDetails, fit)...)
+	err := row.Scan(values.targets(activity, activityDetails, diveDetails)...)
 	if err != nil {
 		return diveSummary{}, err
 	}
@@ -385,25 +383,24 @@ func scanDiveSummaryWithDocuments(row rowScanner, activity, activityDetails, div
 }
 
 type diveSampleAPIResponse struct {
-	Index                   int             `json:"index"`
-	TimestampMS             int64           `json:"timestamp_ms"`
-	ElapsedMS               int64           `json:"elapsed_ms"`
-	HeartRate               *float64        `json:"heart_rate,omitempty"`
-	TemperatureCelsius      *float64        `json:"temperature_celsius,omitempty"`
-	DepthMeters             *float64        `json:"depth_meters,omitempty"`
-	NextStopDepthMeters     *float64        `json:"next_stop_depth_meters,omitempty"`
-	NextStopTimeSeconds     *float64        `json:"next_stop_time_seconds,omitempty"`
-	TimeToSurfaceSeconds    *float64        `json:"time_to_surface_seconds,omitempty"`
-	NDLTimeSeconds          *float64        `json:"ndl_time_seconds,omitempty"`
-	PercentCNSLoad          *float64        `json:"percent_cns_load,omitempty"`
-	PercentN2Load           *float64        `json:"percent_n2_load,omitempty"`
-	PSAC                    *float64        `json:"psac,omitempty"`
-	RMV                     *float64        `json:"rmv,omitempty"`
-	VSAC                    *float64        `json:"vsac,omitempty"`
-	AirTimeRemainingSeconds *float64        `json:"air_time_remaining_seconds,omitempty"`
-	PO2                     *float64        `json:"po2,omitempty"`
-	AscentRate              *float64        `json:"ascent_rate,omitempty"`
-	Raw                     json.RawMessage `json:"raw"`
+	Index                   int      `json:"index"`
+	TimestampMS             int64    `json:"timestamp_ms"`
+	ElapsedMS               int64    `json:"elapsed_ms"`
+	HeartRate               *float64 `json:"heart_rate,omitempty"`
+	TemperatureCelsius      *float64 `json:"temperature_celsius,omitempty"`
+	DepthMeters             *float64 `json:"depth_meters,omitempty"`
+	NextStopDepthMeters     *float64 `json:"next_stop_depth_meters,omitempty"`
+	NextStopTimeSeconds     *float64 `json:"next_stop_time_seconds,omitempty"`
+	TimeToSurfaceSeconds    *float64 `json:"time_to_surface_seconds,omitempty"`
+	NDLTimeSeconds          *float64 `json:"ndl_time_seconds,omitempty"`
+	PercentCNSLoad          *float64 `json:"percent_cns_load,omitempty"`
+	PercentN2Load           *float64 `json:"percent_n2_load,omitempty"`
+	PSAC                    *float64 `json:"psac,omitempty"`
+	RMV                     *float64 `json:"rmv,omitempty"`
+	VSAC                    *float64 `json:"vsac,omitempty"`
+	AirTimeRemainingSeconds *float64 `json:"air_time_remaining_seconds,omitempty"`
+	PO2                     *float64 `json:"po2,omitempty"`
+	AscentRate              *float64 `json:"ascent_rate,omitempty"`
 }
 
 func (s *sqlStore) DiveSamples(ctx context.Context, diveID int64, after, limit int) ([]diveSampleAPIResponse, bool, error) {
@@ -417,7 +414,7 @@ func (s *sqlStore) DiveSamples(ctx context.Context, diveID int64, after, limit i
 	query := s.bind(`SELECT sample_index, timestamp_ms, elapsed_ms, heart_rate, temperature_celsius,
 		depth_meters, next_stop_depth_meters, next_stop_time_seconds, time_to_surface_seconds,
 		ndl_time_seconds, percent_cns_load, percent_n2_load, psac, rmv, vsac,
-		air_time_remaining_seconds, po2, ascent_rate, raw_json
+		air_time_remaining_seconds, po2, ascent_rate
 		FROM dive_samples WHERE dive_id = ? AND sample_index > ? ORDER BY sample_index LIMIT ?`)
 	rows, err := s.db.QueryContext(ctx, query, diveID, after, limit+1)
 	if err != nil {
@@ -429,11 +426,10 @@ func (s *sqlStore) DiveSamples(ctx context.Context, diveID int64, after, limit i
 		var item diveSampleAPIResponse
 		var heartRate, temperature, depth, nextStopDepth, nextStopTime, timeToSurface sql.NullFloat64
 		var ndlTime, percentCNS, percentN2, psac, rmv, vsac, airTime, po2, ascentRate sql.NullFloat64
-		var raw string
 		if err := rows.Scan(
 			&item.Index, &item.TimestampMS, &item.ElapsedMS, &heartRate, &temperature,
 			&depth, &nextStopDepth, &nextStopTime, &timeToSurface, &ndlTime,
-			&percentCNS, &percentN2, &psac, &rmv, &vsac, &airTime, &po2, &ascentRate, &raw,
+			&percentCNS, &percentN2, &psac, &rmv, &vsac, &airTime, &po2, &ascentRate,
 		); err != nil {
 			return nil, false, fmt.Errorf("read dive sample for API: %w", err)
 		}
@@ -452,7 +448,6 @@ func (s *sqlStore) DiveSamples(ctx context.Context, diveID int64, after, limit i
 		item.AirTimeRemainingSeconds = nullFloatPointer(airTime)
 		item.PO2 = nullFloatPointer(po2)
 		item.AscentRate = nullFloatPointer(ascentRate)
-		item.Raw = json.RawMessage(raw)
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {

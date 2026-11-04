@@ -1,0 +1,15 @@
+# Send only build inputs. Local configuration, keys, SQL, media, Git metadata,
+# editor settings and test fixtures never enter the Docker build context.
+**
+!go.mod
+!go.sum
+!main.go
+!internal/
+!internal/**/
+!internal/**/*.go
+**/*_test.go
+!docs/
+!docs/openapi.go
+!docs/openapi.yaml
+!docs/swagger/
+!docs/swagger/**

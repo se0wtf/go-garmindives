@@ -20,18 +20,19 @@ OPTIONS returns 204. Cookie auth and CSRF apply as described in
 | GET | `/api/v1/dives` | Public | List dives, newest first | — | `limit`, `cursor`, `from`, `to`, `location`, `year`, `country`, `trip_id`, `ratings` | 200, 400, 500, 503 |
 | GET | `/api/v1/dives/years` | Public | List distinct years present in stored dives, newest first | — | — | 200, 500, 503 |
 | GET | `/api/v1/dives/countries` | Public | List effective countries present in stored dives for the filter dropdown | — | `q` | 200, 500, 503 |
-| GET | `/api/v1/dives/{id}` | Public | Read a dive with source documents, decoded FIT data, and media | — | — | 200, 400, 404, 500, 503 |
+| GET | `/api/v1/dives/{id}` | Public | Read a dive with Garmin documents, indexed metadata, and media; no FIT document | — | — | 200, 400, 404, 500, 503 |
+| GET | `/api/v1/admin/dives/{id}/fit` | Admin | Download original FIT bytes, or a ZIP for multiple cached files | — | — | 200, 206, 400, 401, 404, 416, 500, 503 |
 | PATCH | `/api/v1/dives/{id}` | Admin | Update cover, country override, or trip membership | `application/json` / DivePatch | — | 200, 400, 404, 500, 503, 401, 403 |
 | GET | `/api/v1/dives/{id}/samples` | Public | Read dive profile samples in sample-index order | — | `limit`, `cursor` | 200, 400, 404, 500, 503 |
-| GET | `/api/v1/dives/{id}/media` | Public | List attachments, sorted by original filename | — | `limit`, `cursor` | 200, 400, 404, 500, 503 |
-| POST | `/api/v1/dives/{id}/media` | Admin | Upload one original photo or video | `multipart/form-data` / object | — | 201, 400, 404, 409, 413, 415, 500, 503, 401, 403 |
+| GET | `/api/v1/dives/{id}/media` | Public | List attachments, sorted by retained filename | — | `limit`, `cursor` | 200, 400, 404, 500, 503 |
+| POST | `/api/v1/dives/{id}/media` | Admin | Upload and process one photo or video | `multipart/form-data` / object | — | 201, 400, 404, 409, 413, 415, 500, 503, 401, 403 |
 | GET | `/api/v1/dives/{id}/media/{mediaID}` | Public | Read attachment metadata and URLs | — | — | 200, 400, 404, 500, 503 |
 | PATCH | `/api/v1/dives/{id}/media/{mediaID}` | Admin | Update media description, caption, favorite, or projection | `application/json` / MediaPatch | — | 200, 400, 404, 409, 500, 503, 401, 403 |
 | DELETE | `/api/v1/dives/{id}/media/{mediaID}` | Admin | Delete an attachment and its files | — | — | 204, 400, 404, 500, 503, 401, 403 |
-| GET | `/api/v1/dives/{id}/media/{mediaID}/thumbnail` | Public | Serve the JPEG thumbnail, up to 640 pixels per dimension | — | `v` | 200, 206, 304, 400, 404, 412, 416, 500, 503 |
-| HEAD | `/api/v1/dives/{id}/media/{mediaID}/thumbnail` | Public | Read thumbnail headers without downloading it | — | `v` | 200, 206, 304, 400, 404, 412, 416, 500, 503 |
-| GET | `/assets/{id}/{filename}` | Public | Serve an original photo or video | — | — | 200, 206, 304, 400, 404, 409, 412, 416, 500, 503 |
-| HEAD | `/assets/{id}/{filename}` | Public | Read original-file headers without downloading it | — | — | 200, 206, 304, 400, 404, 409, 412, 416, 500, 503 |
+| GET | `/api/v1/dives/{id}/media/{mediaID}/thumbnail` | Public | Serve a photo or video thumbnail | — | `format`, `v` | 200, 206, 304, 400, 404, 412, 416, 500, 503 |
+| HEAD | `/api/v1/dives/{id}/media/{mediaID}/thumbnail` | Public | Read thumbnail headers without downloading it | — | `format`, `v` | 200, 206, 304, 400, 404, 412, 416, 500, 503 |
+| GET | `/assets/{id}/{filename}` | Public | Serve a retained photo or original video | — | `format` | 200, 206, 304, 400, 404, 409, 412, 416, 500, 503 |
+| HEAD | `/assets/{id}/{filename}` | Public | Read original-file headers without downloading it | — | `format` | 200, 206, 304, 400, 404, 409, 412, 416, 500, 503 |
 | POST | `/api/v1/media/scan` | Admin | Reconcile media metadata and thumbnails with the assets directory | — | `force` | 200, 400, 500, 503, 401, 403 |
 | GET | `/api/v1/media/status` | Public | Read indexed media totals and configured upload limits | — | — | 200, 500, 503 |
 | GET | `/api/v1/translations/status` | Public | Read English translation progress and configuration | — | — | 200, 500, 503 |
@@ -55,15 +56,15 @@ OPTIONS returns 204. Cookie auth and CSRF apply as described in
 | PUT | `/api/v1/trips/{tripID}/dives/{id}` | Admin | Manually assign a dive to this trip | — | — | 204, 400, 404, 500, 503, 401, 403 |
 | DELETE | `/api/v1/trips/{tripID}/dives/{id}` | Admin | Remove a dive and persist its automatic-trip exclusion | — | — | 204, 400, 404, 500, 503, 401, 403 |
 | GET | `/api/v1/media/favorites` | Public | List favorite photos/videos across dives | — | `limit`, `cursor`, `trip_id` | 200, 400, 404, 500, 503 |
-| GET | `/api/v1/trips/{tripID}/media` | Public | List attachments, sorted by original filename | — | `limit`, `cursor` | 200, 400, 404, 500, 503 |
-| POST | `/api/v1/trips/{tripID}/media` | Admin | Upload one original photo or video | `multipart/form-data` / object | — | 201, 400, 404, 409, 413, 415, 500, 503, 401, 403 |
+| GET | `/api/v1/trips/{tripID}/media` | Public | List attachments, sorted by retained filename | — | `limit`, `cursor` | 200, 400, 404, 500, 503 |
+| POST | `/api/v1/trips/{tripID}/media` | Admin | Upload and process one photo or video | `multipart/form-data` / object | — | 201, 400, 404, 409, 413, 415, 500, 503, 401, 403 |
 | GET | `/api/v1/trips/{tripID}/media/{mediaID}` | Public | Read attachment metadata and URLs | — | — | 200, 400, 404, 500, 503 |
 | PATCH | `/api/v1/trips/{tripID}/media/{mediaID}` | Admin | Update description, caption, or 360-degree projection settings | `application/json` / MediaPatch | — | 200, 400, 404, 409, 500, 503, 401, 403 |
 | DELETE | `/api/v1/trips/{tripID}/media/{mediaID}` | Admin | Delete an attachment and its files | — | — | 204, 400, 404, 500, 503, 401, 403 |
-| GET | `/api/v1/trips/{tripID}/media/{mediaID}/thumbnail` | Public | Serve the JPEG thumbnail, up to 640 pixels per dimension | — | `v` | 200, 206, 304, 400, 404, 412, 416, 500, 503 |
-| HEAD | `/api/v1/trips/{tripID}/media/{mediaID}/thumbnail` | Public | Read thumbnail headers without downloading it | — | `v` | 200, 206, 304, 400, 404, 412, 416, 500, 503 |
-| GET | `/assets/trips/{tripID}/{filename}` | Public | Serve an original photo or video | — | — | 200, 206, 304, 400, 404, 409, 412, 416, 500, 503 |
-| HEAD | `/assets/trips/{tripID}/{filename}` | Public | Read original-file headers without downloading it | — | — | 200, 206, 304, 400, 404, 409, 412, 416, 500, 503 |
+| GET | `/api/v1/trips/{tripID}/media/{mediaID}/thumbnail` | Public | Serve a photo or video thumbnail | — | `format`, `v` | 200, 206, 304, 400, 404, 412, 416, 500, 503 |
+| HEAD | `/api/v1/trips/{tripID}/media/{mediaID}/thumbnail` | Public | Read thumbnail headers without downloading it | — | `format`, `v` | 200, 206, 304, 400, 404, 412, 416, 500, 503 |
+| GET | `/assets/trips/{tripID}/{filename}` | Public | Serve a retained photo or original video | — | `format` | 200, 206, 304, 400, 404, 409, 412, 416, 500, 503 |
+| HEAD | `/assets/trips/{tripID}/{filename}` | Public | Read original-file headers without downloading it | — | `format` | 200, 206, 304, 400, 404, 409, 412, 416, 500, 503 |
 | GET | `/api/v1/setup/status` | Bootstrap | Read persistent configuration state and runtime readiness | — | — | 200 |
 | GET | `/api/v1/setup/countries` | Bootstrap | List country choices before SQL initialization | — | — | 200 |
 | POST | `/api/v1/setup` | Bootstrap | Configure SQL, administrator password, and residence history | `application/json` / SetupRequest | — | 201, 400, 503, 403, 429, 409, 401, 500, 415 |
@@ -125,6 +126,6 @@ alone cannot express:
 
 Garmin synchronization and single-dive refresh are CLI commands. There is no
 public endpoint to delete a dive, change its imported notes/rating/name/date/GPS,
-download a dedicated FIT binary, move media between owners, undelete a trip,
+move media between owners, undelete a trip,
 or trigger server restarts. Any new frontend control
 requiring these behaviors needs an explicit backend feature, not a guessed route.

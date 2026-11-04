@@ -47,6 +47,33 @@ Do not gate frontend startup on backend readiness: setup is rendered by the
 frontend while readiness is false. Start serve, visit the frontend setup page,
 complete setup, then wait for ready before scheduling sync.
 
+### Container image
+
+The root [Dockerfile](../../Dockerfile) builds with Go 1.26 on Debian Trixie and
+copies a static application binary into Alpine 3.24. Runtime packages are
+`ca-certificates`, `ffmpeg` (including FFprobe), `libjxl-tools` (cjxl/djxl),
+`libheif-tools` with `libheif-libde265` for HEIC primary-image decoding, and
+`tzdata`, with their package-manager-resolved shared libraries. No Go toolchain or
+SQL client/server library is required in the final image. The
+[build context allowlist](../../.dockerignore) excludes local settings, credentials,
+databases, media, Git/editor state, and test fixtures.
+
+Default command is `serve`; override with `sync` for scheduled one-shot imports or
+`admin reset-password` for interactive recovery. Both roles use UID/GID 10001:10001.
+Environment defaults set listener `0.0.0.0:8080`, config `/data/config.yaml`, home
+`/data`, and XDG config home `/tokens`. Default YAML-relative paths therefore put
+SQLite at `/data/dives.db` and media at `/data/assets`. Mount `/data` persistently;
+mount `/tokens` separately for sync's private Garmin cache. Use the same data/config
+mount and SQL ENV overrides in both backend roles. Bind-mount ownership must permit
+the runtime UID to write, including renaming configuration and photo files.
+To keep media separately, mount its host directory at `/data/assets` or configure
+a different media directory and mount it there. Runtime ENV can override the image
+defaults. No health check treats incomplete setup or a long initial media scan as
+a container failure; use the documented liveness/readiness endpoints externally.
+
+Build/run examples are in [README](../../README.md#docker). TLS remains at the
+same-origin frontend/proxy and secure cookies remain enabled by default.
+
 ## Startup, background tasks, and scheduling
 
 Serve exposes its listener while runtime activation proceeds. Activation validates
@@ -121,21 +148,48 @@ by these application settings/token caches or printed intentionally in logs.
 
 | Extensions (case insensitive) | Kind |
 | --- | --- |
-| jpg, jpeg, jps, png, gif, webp, heic, heif, avif, tif, tiff, bmp | photo |
+| jpg, jpeg, jps, png, gif, webp, heic, heif, avif, tif, tiff, bmp, jxl | photo |
 | mp4, m4v, mov, mkv, webm, avi, mts, m2ts, 3gp, insv, 360 | video |
 
-Install FFmpeg and FFprobe in the serve container for inspection/previews, with
+Install FFmpeg and FFprobe plus `cjxl`/`djxl` and libheif's `heif-convert`/`heif-dec`
+with an HEVC decoder in the serve container for inspection/previews, with
 codecs for intended formats and v360 for perspective previews. Processing targets
 Linux/macOS. Unsupported tools/codecs produce thumbnail_error while retaining
 accepted originals. Camera-specific formats may require an already stitched export
 for browser playback; storing a file does not add a browser codec or stitcher.
+Use `brew install ffmpeg jpeg-xl libheif` on macOS or
+`apt-get install ffmpeg libjxl-tools libheif-examples libheif-plugin-libde265`
+on Debian/Ubuntu. FFmpeg need not include a
+JPEG XL codec: JXL decoding is handled explicitly by djxl. CI installs these tools
+to exercise actual encoding and decoding.
+HEIC inspection, resizing and JPEG fallback use the complete libheif-decoded
+image, including grid assembly and orientation. They never fall back to a single
+FFmpeg video stream. Multiple top-level images are retained with a processing
+error. Rebuild the Docker image to pick up the HEIF runtime packages.
+
+Startup and admin scans apply the [photo profile](backend.md#filesystem-media-lifecycle)
+to existing photos as well as new imports. Eligible source photos are deleted
+after verified JXL/master thumbnail publication and SQL success. Keep a separate
+source archive if needed. Rescans reuse completed masters without re-encoding.
+`.photo-jobs` and `.uploads` can contain pending recovery data; retain these with
+the assets after an interrupted conversion. `.thumbnails` and `.fallbacks` are
+rebuildable caches. JPEG browser fallbacks are generated locally on first use;
+they do not contact an external service.
+
+For an earlier tile-only HEIC conversion, copy the original back under its source
+filename and rescan, or re-upload the original through the existing media upload
+API. Repairs preserve metadata and covers. A missing source is reported through
+`thumbnail_error` and scan logs; the retained JXL is not re-encoded as a repair.
+HEIF decoder versioning refreshes legacy previews/fallbacks even for small HEICs
+whose original bytes remain unchanged.
 
 API uploads default to 16 GiB per file, plus a bounded multipart overhead allowance.
 Upload/asset handlers extend the read deadline to one hour and clear the normal
 30-second write timeout. Configure proxy body/time limits consistently; the proxy
 must not reject a permitted large file first. The general server header/read/write/
-idle timeouts are 5/15/30/60 seconds. Media processing can take up to two minutes
-for inspection plus two for thumbnail generation per changed file.
+idle timeouts are 5/15/30/60 seconds. Each media tool invocation has a two-minute
+timeout. Photo conversion uses several decode/resize/encode/verification steps,
+so initial scans and synchronous uploads can take longer than a single timeout.
 
 Copy filesystem imports using a hidden temporary name, then rename into the owner
 directory when complete. Scan explicitly after copying during runtime; there is no
@@ -189,8 +243,8 @@ requires the existing SQL administrator password and retains history/identity.
 ## Backup, restore, and upgrades
 
 Back up SQL, the YAML identity/settings, externally managed configuration/secrets,
-and the original assets together. Keep Garmin token-cache files if convenient;
-keys can issue fresh tokens. Thumbnails are rebuildable; original media, descriptions,
+and the retained assets together. Keep Garmin token-cache files if convenient;
+keys can issue fresh tokens. Thumbnails/fallbacks are rebuildable; retained media, descriptions,
 trip edits, residence, FIT bytes, and paid translation results are durable data.
 Use database-consistent backups (PostgreSQL tooling or a consistent SQLite backup/
 stopped-writer copy). For a simple coordinated backup/restore, stop serve and sync,
