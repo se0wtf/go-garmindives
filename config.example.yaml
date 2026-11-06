@@ -16,3 +16,5 @@ auth:
 media:
   directory: assets
   max_upload_bytes: 17179869184
+  pending_directory: pending # Relative to media.directory; absolute paths also work.
+  pending_scan_interval: 60s

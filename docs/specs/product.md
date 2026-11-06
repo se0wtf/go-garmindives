@@ -185,9 +185,18 @@ and date range can change after a backfill; its ID is the navigation identity.
 
 ## Media, covers, favorites, and 360 video
 
+The [pending media inbox](pending-media.md) is a private staging area. Exactly one
+dive matching capture time in its start-minus-10-minute to end-plus-10-minute
+window is assigned automatically; unknown timezone means dive local time. Ambiguous
+metadata and conflicts remain for admin review. Capture metadata survives conversion
+in SQL; originals leave pending only after a complete import. Trip membership and
+favorites are unchanged by this process.
+
 An attachment belongs either to a dive or a trip. Media lives on disk; SQL
-stores metadata and editorial fields. Videos and photos below both size thresholds
-keep their original bytes/name. Other photos become JPEG XL and the source is
+stores metadata and editorial fields. Compatible H.264/AAC MP4 videos within the
+1080p bounds and photos below both size thresholds keep their original bytes/name.
+Other videos are normalized to MP4 using the [video profile](video-processing.md).
+Other photos become JPEG XL and the source is
 deleted after verified processing and a successful SQL update. The retained name
 includes the source filename, for example `reef.jpg.jxl`; IDs and editorial fields
 remain stable. [Processing rules](backend.md#filesystem-media-lifecycle) specify
@@ -208,7 +217,8 @@ Photos get JPEG XL previews; videos get JPEG previews. Photos have cached JPEG
 fallbacks for browsers without JPEG XL support. Failure to generate a thumbnail
 keeps the accepted source with a processing error. A browser may be unable to decode a
 video format that the backend stores; provide a download/unsupported-format
-state. The server does not convert uploads to browser-compatible video formats.
+state for processing failures. Successful video normalization provides H.264/AAC
+MP4; original footage is retired only after verified processing and SQL publication.
 
 `projection` is the saved hint: `auto`, `flat`, `180`, or `360`.
 `effective_projection` is the resolved presentation. Automatic detection needs

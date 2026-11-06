@@ -22,7 +22,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const sqlSchemaVersion = 11
+const sqlSchemaVersion = 12
 
 type sqlStore struct {
 	db           *sql.DB
@@ -31,6 +31,7 @@ type sqlStore struct {
 	media        *mediaLibrary
 	translations *translationService
 	geocoder     *countryService
+	pending      *pendingService
 }
 
 type migration struct {
@@ -192,7 +193,7 @@ var migrations = []migration{{
 		)`,
 		`CREATE INDEX translation_cache_work_idx ON translation_cache (profile, active, status, retry_at, lease_until)`,
 	},
-}, travelMigration, authMigration}
+}, travelMigration, authMigration, pendingMigration}
 
 func openSQLStore(ctx context.Context, dialect, endpoint string) (*sqlStore, error) {
 	dialect = strings.ToLower(strings.TrimSpace(dialect))

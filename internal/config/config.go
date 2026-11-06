@@ -37,8 +37,10 @@ type Auth struct {
 	IdleTimeout     string `yaml:"idle_timeout" json:"idle_timeout"`
 }
 type Media struct {
-	Directory      string `yaml:"directory" json:"directory"`
-	MaxUploadBytes int64  `yaml:"max_upload_bytes" json:"max_upload_bytes"`
+	Directory           string `yaml:"directory" json:"directory"`
+	MaxUploadBytes      int64  `yaml:"max_upload_bytes" json:"max_upload_bytes"`
+	PendingDirectory    string `yaml:"pending_directory" json:"pending_directory"`
+	PendingScanInterval string `yaml:"pending_scan_interval" json:"pending_scan_interval"`
 }
 type Config struct {
 	Version     int      `yaml:"version" json:"version"`
@@ -56,7 +58,7 @@ type Loaded struct {
 }
 
 func Default() Config {
-	return Config{Version: configVersion, Database: Database{Type: SQLite, URI: "dives.db"}, HTTP: HTTP{Listen: "127.0.0.1:8080", CookieSecure: true}, Auth: Auth{SessionLifetime: "24h", IdleTimeout: "2h"}, Media: Media{Directory: "assets", MaxUploadBytes: DefaultMediaMaxUpload}}
+	return Config{Version: configVersion, Database: Database{Type: SQLite, URI: "dives.db"}, HTTP: HTTP{Listen: "127.0.0.1:8080", CookieSecure: true}, Auth: Auth{SessionLifetime: "24h", IdleTimeout: "2h"}, Media: Media{Directory: "assets", MaxUploadBytes: DefaultMediaMaxUpload, PendingDirectory: "pending", PendingScanInterval: "60s"}}
 }
 
 func configPathFromArgs(args []string) (string, error) {
@@ -113,6 +115,8 @@ func Resolve(path string, file Config) (Loaded, error) {
 		{"http.listen", []string{"GARMIN_API_ADDR"}, &c.HTTP.Listen}, {"http.public_url", []string{"GARMIN_PUBLIC_URL"}, &c.HTTP.PublicURL},
 		{"auth.session_lifetime", []string{"GARMIN_SESSION_LIFETIME"}, &c.Auth.SessionLifetime}, {"auth.idle_timeout", []string{"GARMIN_SESSION_IDLE_TIMEOUT"}, &c.Auth.IdleTimeout},
 		{"media.directory", []string{"GARMIN_ASSETS_DIR"}, &c.Media.Directory},
+		{"media.pending_directory", []string{"GARMIN_PENDING_DIR"}, &c.Media.PendingDirectory},
+		{"media.pending_scan_interval", []string{"GARMIN_PENDING_SCAN_INTERVAL"}, &c.Media.PendingScanInterval},
 	} {
 		for _, name := range field.names {
 			if value, ok := os.LookupEnv(name); ok {
@@ -212,6 +216,13 @@ func Validate(c Config) error {
 	if c.Media.Directory == "" || c.Media.MaxUploadBytes <= 0 || c.Media.MaxUploadBytes > 1<<60 {
 		return errors.New("invalid media directory or upload limit")
 	}
+	if strings.TrimSpace(c.Media.PendingDirectory) == "" {
+		return errors.New("media.pending_directory must not be empty")
+	}
+	interval, err := time.ParseDuration(c.Media.PendingScanInterval)
+	if err != nil || interval < time.Second || interval > 24*time.Hour {
+		return errors.New("media.pending_scan_interval must be between 1s and 24h")
+	}
 	return nil
 }
 func (c Loaded) DatabaseOutput() Output {
@@ -240,6 +251,14 @@ func (c Loaded) AssetsDirectory() string {
 		path = filepath.Join(filepath.Dir(c.Path), path)
 	}
 	return path
+}
+
+func (c Loaded) PendingDirectory() string {
+	path := c.Effective.Media.PendingDirectory
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(c.AssetsDirectory(), path)
+	}
+	return filepath.Clean(path)
 }
 
 func Write(path string, c Config) error {

@@ -44,9 +44,13 @@ type applicationRuntime struct {
 	geocoder     *countryService
 	auth         *adminAuth
 	handler      http.Handler
+	pending      *pendingService
 }
 
 func (r *applicationRuntime) Close() {
+	if r.pending != nil {
+		r.pending.Close()
+	}
 	r.geocoder.Close()
 	r.translations.Close()
 	r.media.Close()
@@ -159,6 +163,25 @@ func (a *application) activate(c appconfig.Loaded) (*applicationRuntime, string)
 		}
 	}()
 	store.media = media
+	interval, _ := time.ParseDuration(c.Effective.Media.PendingScanInterval)
+	pending, err := newPendingService(media, c.PendingDirectory(), interval)
+	if err != nil {
+		if a.logger != nil {
+			a.logger.Warn("pending photo directory unavailable", "directory", c.PendingDirectory(), "err", err)
+		}
+		return nil, "media_unavailable"
+	}
+	defer func() {
+		if !ok {
+			pending.Close()
+		}
+	}()
+	store.pending = pending
+	// Finish recorded assignments before the ordinary media scan can reconcile
+	// files published just before an earlier process stopped.
+	if _, err := pending.Recover(a.ctx); err != nil {
+		return nil, "media_unavailable"
+	}
 	if err := store.reconcileTravel(a.ctx); err != nil {
 		return nil, "database_unavailable"
 	}
@@ -178,10 +201,11 @@ func (a *application) activate(c appconfig.Loaded) (*applicationRuntime, string)
 	geocoder := newCountryService(store, geoConfig, lookup, a.logger)
 	store.geocoder = geocoder
 	auth := newAdminAuth(a, store, c.Effective)
-	r := &applicationRuntime{store: store, media: media, translations: translations, geocoder: geocoder, auth: auth}
+	r := &applicationRuntime{store: store, media: media, translations: translations, geocoder: geocoder, auth: auth, pending: pending}
 	r.handler = auth.Handler(newAPIHandler(store, a.logger))
 	translations.Start(a.ctx)
 	geocoder.Start(a.ctx)
+	pending.Start(a.ctx)
 	ok = true
 	if a.logger != nil {
 		a.logger.Info("configured service ready", "output_type", config.Type, "output", config.LogDestination())

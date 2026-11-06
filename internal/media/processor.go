@@ -22,6 +22,15 @@ type Probe struct {
 	Projection       string
 	ProjectionFormat string
 	JSON             json.RawMessage
+	VideoCodec       string
+	PixelFormat      string
+	AudioCodecs      []string
+	Container        string
+	Rotation         int
+	SampleAspect     float64
+	ColorTransfer    string
+	Interlaced       bool
+	VideoStreams     int
 }
 
 type ThumbnailOptions struct {
@@ -102,29 +111,63 @@ func (p *ffmpegProcessor) Inspect(ctx context.Context, input *os.File) (Probe, e
 func DecodeProbe(data []byte) (Probe, error) {
 	var doc struct {
 		Streams []struct {
-			CodecType string            `json:"codec_type"`
-			Width     int               `json:"width"`
-			Height    int               `json:"height"`
-			Duration  string            `json:"duration"`
-			Tags      map[string]string `json:"tags"`
-			SideData  []struct {
-				Type         string `json:"type"`
-				SideDataType string `json:"side_data_type"`
-				Projection   string `json:"projection"`
+			CodecType     string `json:"codec_type"`
+			CodecName     string `json:"codec_name"`
+			PixelFormat   string `json:"pix_fmt"`
+			SampleAspect  string `json:"sample_aspect_ratio"`
+			ColorTransfer string `json:"color_transfer"`
+			FieldOrder    string `json:"field_order"`
+			Disposition   struct {
+				AttachedPic int `json:"attached_pic"`
+			} `json:"disposition"`
+			Width    int               `json:"width"`
+			Height   int               `json:"height"`
+			Duration string            `json:"duration"`
+			Tags     map[string]string `json:"tags"`
+			SideData []struct {
+				Type         string  `json:"type"`
+				SideDataType string  `json:"side_data_type"`
+				Projection   string  `json:"projection"`
+				Rotation     float64 `json:"rotation"`
 			} `json:"side_data_list"`
 		} `json:"streams"`
 		Format struct {
 			Duration string `json:"duration"`
+			Name     string `json:"format_name"`
 		} `json:"format"`
 	}
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return Probe{}, fmt.Errorf("decode ffprobe output: %w", err)
 	}
+	audio := []string{}
+	videoCount := 0
 	for _, stream := range doc.Streams {
-		if stream.CodecType != "video" || stream.Width <= 0 || stream.Height <= 0 {
+		if stream.CodecType == "audio" {
+			audio = append(audio, stream.CodecName)
+		}
+		if stream.CodecType == "video" && stream.Disposition.AttachedPic == 0 {
+			videoCount++
+		}
+	}
+	for _, stream := range doc.Streams {
+		if stream.CodecType != "video" || stream.Disposition.AttachedPic != 0 || stream.Width <= 0 || stream.Height <= 0 {
 			continue
 		}
 		probe := Probe{Width: stream.Width, Height: stream.Height, JSON: append(json.RawMessage{}, data...)}
+		probe.VideoCodec, probe.PixelFormat, probe.Container = stream.CodecName, stream.PixelFormat, doc.Format.Name
+		probe.AudioCodecs, probe.VideoStreams, probe.ColorTransfer = audio, videoCount, stream.ColorTransfer
+		probe.SampleAspect = 1
+		if parts := strings.Split(stream.SampleAspect, ":"); len(parts) == 2 {
+			n, _ := strconv.ParseFloat(parts[0], 64)
+			d, _ := strconv.ParseFloat(parts[1], 64)
+			if n > 0 && d > 0 && !math.IsInf(n/d, 0) && !math.IsNaN(n/d) {
+				probe.SampleAspect = n / d
+			}
+		}
+		probe.Interlaced = stream.FieldOrder != "" && stream.FieldOrder != "unknown" && stream.FieldOrder != "progressive"
+		if rotation, err := strconv.Atoi(stream.Tags["rotate"]); err == nil {
+			probe.Rotation = rotation
+		}
 		probe.Duration, _ = strconv.ParseFloat(doc.Format.Duration, 64)
 		if probe.Duration == 0 {
 			probe.Duration, _ = strconv.ParseFloat(stream.Duration, 64)
@@ -133,6 +176,9 @@ func DecodeProbe(data []byte) (Probe, error) {
 			probe.Duration = 0
 		}
 		for _, data := range stream.SideData {
+			if data.SideDataType == "Display Matrix" {
+				probe.Rotation = int(math.Round(data.Rotation))
+			}
 			if layout := detectedStereoLayout(data.Type); layout != "" {
 				probe.StereoLayout = layout
 			}
@@ -143,6 +189,7 @@ func DecodeProbe(data []byte) (Probe, error) {
 				}
 			}
 		}
+		probe.Rotation = ((probe.Rotation % 360) + 360) % 360
 		if probe.StereoLayout == "" {
 			probe.StereoLayout = detectedStereoLayout(stream.Tags["stereo_mode"])
 		}
@@ -190,7 +237,7 @@ func (p *ffmpegProcessor) Thumbnail(ctx context.Context, input, output *os.File,
 		filter += "scale=640:640:force_original_aspect_ratio=decrease"
 	}
 	cmd := mediaCommand(ctx, ffmpeg, input, "-hide_banner", "-loglevel", "error", "-nostdin",
-		"-i", "/dev/fd/3", "-map", "0:v:0", "-an", "-sn", "-dn", "-vf", filter,
+		"-i", "/dev/fd/3", "-map", "0:V:0", "-an", "-sn", "-dn", "-vf", filter,
 		"-frames:v", "1", "-threads", "1", "-c:v", "mjpeg", "-q:v", "3", "-f", "image2pipe", "pipe:1")
 	stderr := &boundedOutput{limit: 4096}
 	cmd.Stdout, cmd.Stderr = output, stderr

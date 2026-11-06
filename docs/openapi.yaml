@@ -17,7 +17,7 @@ info:
     durations in seconds, and sample timestamps/elapsed times in milliseconds.
 
 
-    Videos and small photos retain their filenames and bytes. Larger photos become JPEG XL
+    Compatible H.264/AAC MP4 videos within 1080p bounds and small photos retain their filenames and bytes. Other videos are normalized to H.264 MP4; larger photos become JPEG XL
 
     after verified processing; their source is deleted after a successful SQL update. Metadata and thumbnails
 
@@ -45,6 +45,8 @@ tags:
     description: Photos, videos, descriptions, 360-degree projection metadata, captions, and filesystem indexing
   - name: Assets
     description: Retained media, JXL photo/JPEG video thumbnails, and cached JPEG fallbacks with range/conditional requests
+  - name: Pending media
+    description: Administrator-only photo/video inbox, capture-time matching and manual assignment
   - name: Translations
     description: Background French-to-English translation, cached in the local database
 
@@ -398,7 +400,12 @@ paths:
         HEIC uses libheif for full grid assembly and orientation, never a single HEVC
         tile. Ambiguous multi-image HEIF containers retain the source with an error.
         Unsupported codecs, missing tools, and animated sources requiring conversion
-        keep the source with thumbnail_status=error. Videos retain original bytes.
+        keep the source with thumbnail_status=error. Videos normalize to H.264/yuv420p MP4,
+        maximum 1920x1080 landscape or 1080x1920 portrait, preserving aspect ratio without
+        upscaling. Compatible MP4/M4V files remain unchanged. Other containers append .mp4;
+        compatible H.264 is stream-copied where possible and other audio becomes AAC.
+        Conversion/thumbnail/SQL verification precedes source cleanup. IDs, capture and
+        editorial fields survive. HDR conversion requires zscale/tonemap; failures retain the source.
         Spherical projection metadata is detected when present. Use PATCH with
         projection="360" for an untagged stitched equirectangular export.
       requestBody:
@@ -711,7 +718,7 @@ paths:
       tags:
       - Assets
       operationId: getMediaOriginal
-      summary: Serve a retained photo or original video
+      summary: Serve a retained photo or normalized video
       description: |
         Streams retained media with inline filename. Photo content_type in metadata
         describes the stored master; HTTP Content-Type describes the representation
@@ -723,7 +730,7 @@ paths:
         have distinct ETags. Range, HEAD and conditional requests are supported.
         A changed indexed file returns 409 media_changed until rescan. Directory
         browsing is disabled. Use effective_projection/projection_format to choose
-        a 360-degree player; video containers are never transcoded or stitched.
+        a 360-degree player; videos are normalized on ingestion, never on asset GET. Raw lenses are not stitched.
       responses:
         '200':
           $ref: '#/components/responses/CompleteFile'
@@ -754,7 +761,7 @@ paths:
       tags:
       - Assets
       operationId: headMediaOriginal
-      summary: Read original-file headers without downloading it
+      summary: Read retained-file headers without downloading it
       responses:
         '200':
           $ref: '#/components/responses/FileHeaders'
@@ -1873,7 +1880,12 @@ paths:
         HEIC uses libheif for full grid assembly and orientation, never a single HEVC
         tile. Ambiguous multi-image HEIF containers retain the source with an error.
         Unsupported codecs, missing tools, and animated sources requiring conversion
-        keep the source with thumbnail_status=error. Videos retain original bytes.
+        keep the source with thumbnail_status=error. Videos normalize to H.264/yuv420p MP4,
+        maximum 1920x1080 landscape or 1080x1920 portrait, preserving aspect ratio without
+        upscaling. Compatible MP4/M4V files remain unchanged. Other containers append .mp4;
+        compatible H.264 is stream-copied where possible and other audio becomes AAC.
+        Conversion/thumbnail/SQL verification precedes source cleanup. IDs, capture and
+        editorial fields survive. HDR conversion requires zscale/tonemap; failures retain the source.
         Spherical projection metadata is detected when present. Use PATCH with
         projection="360" for an untagged stitched equirectangular export.
       requestBody:
@@ -2178,7 +2190,7 @@ paths:
       tags:
       - Assets
       operationId: getMediaOriginalTrip
-      summary: Serve a retained photo or original video
+      summary: Serve a retained photo or normalized video
       description: |
         Streams retained media with inline filename. Photo content_type in metadata
         describes the stored master; HTTP Content-Type describes the representation
@@ -2190,7 +2202,7 @@ paths:
         have distinct ETags. Range, HEAD and conditional requests are supported.
         A changed indexed file returns 409 media_changed until rescan. Directory
         browsing is disabled. Use effective_projection/projection_format to choose
-        a 360-degree player; video containers are never transcoded or stitched.
+        a 360-degree player; videos are normalized on ingestion, never on asset GET. Raw lenses are not stitched.
       responses:
         '200':
           $ref: '#/components/responses/CompleteFile'
@@ -2221,7 +2233,7 @@ paths:
       tags:
       - Assets
       operationId: headMediaOriginalTrip
-      summary: Read original-file headers without downloading it
+      summary: Read retained-file headers without downloading it
       responses:
         '200':
           $ref: '#/components/responses/FileHeaders'
@@ -2678,6 +2690,667 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/admin/media/pending:
+    get:
+      tags:
+      - Pending media
+      operationId: listPendingPhotos
+      summary: List pending media and matching explanations
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PendingList'
+        '400':
+          description: Invalid request or cursor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator session required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Pending media or requested dive not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: source_changed, filename_conflict, or already_assigned. The pending original is retained.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Database, filesystem or media-processing error; inspect pending item reason/error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Initial setup incomplete or pending service unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      parameters:
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          default: 50
+          minimum: 1
+          maximum: 100
+      - name: cursor
+        in: query
+        schema:
+          type: string
+      - name: reason
+        in: query
+        schema:
+          $ref: '#/components/schemas/PendingReason'
+      description: Private, filename/id ordered cursor pagination. Capture dates are read before conversion. Photos with
+        no offset use each candidate dive timezone. Only one unambiguous match in the inclusive start-minus-10-minutes
+        through end-plus-10-minutes window is assigned automatically. Photos remain here when uncertain or processing fails;
+        assignment receipts can expose target_dive_id/media_id during recovery.
+  /api/v1/admin/media/pending/status:
+    get:
+      tags:
+      - Pending media
+      operationId: getPendingPhotoStatus
+      summary: Read inbox counts and background scan status
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PendingStatus'
+        '400':
+          description: Invalid request or cursor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator session required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Pending media or requested dive not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: source_changed, filename_conflict, or already_assigned. The pending original is retained.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Database, filesystem or media-processing error; inspect pending item reason/error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Initial setup incomplete or pending service unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/admin/media/pending/scan:
+    post:
+      tags:
+      - Pending media
+      operationId: scanPendingPhotos
+      summary: Queue a pending-directory scan
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
+      responses:
+        '400':
+          description: Invalid request or cursor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator session required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Pending media or requested dive not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: source_changed, filename_conflict, or already_assigned. The pending original is retained.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Cross-origin write rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Database, filesystem or media-processing error; inspect pending item reason/error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Initial setup incomplete or pending service unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '202':
+          description: Scan queued; poll pending status/list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - status
+                properties:
+                  status:
+                    type: string
+                    enum:
+                    - queued
+      parameters:
+      - name: force
+        in: query
+        description: Re-read metadata/hash even when size and mtime are unchanged. Queue requests are coalesced.
+        schema:
+          type: boolean
+          default: false
+  /api/v1/admin/media/pending/{pendingID}:
+    parameters:
+    - name: pendingID
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: ^[a-f0-9]{32}$
+    get:
+      tags:
+      - Pending media
+      operationId: getPendingPhoto
+      summary: Read one pending media and candidate dives
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PendingItem'
+        '400':
+          description: Invalid request or cursor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator session required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Pending media or requested dive not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: source_changed, filename_conflict, or already_assigned. The pending original is retained.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Database, filesystem or media-processing error; inspect pending item reason/error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Initial setup incomplete or pending service unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags:
+      - Pending media
+      operationId: deletePendingPhoto
+      summary: Delete a pending original and its previews
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
+      responses:
+        '400':
+          description: Invalid request or cursor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator session required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Pending media or requested dive not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: source_changed, filename_conflict, or already_assigned. The pending original is retained.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Cross-origin write rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Database, filesystem or media-processing error; inspect pending item reason/error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Initial setup incomplete or pending service unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '204':
+          description: Pending media deleted. Already committed assignments return 409 already_assigned; use dive media
+            APIs for those.
+  /api/v1/admin/media/pending/{pendingID}/assign:
+    parameters:
+    - name: pendingID
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: ^[a-f0-9]{32}$
+    post:
+      tags:
+      - Pending media
+      operationId: assignPendingPhoto
+      summary: Assign a pending media to a chosen dive
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MediaItem'
+        '400':
+          description: Invalid request or cursor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator session required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Pending media or requested dive not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: source_changed, filename_conflict, or already_assigned. The pending original is retained.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Cross-origin write rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Database, filesystem or media-processing error; inspect pending item reason/error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Initial setup incomplete or pending service unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      description: Videos are matched by capture start, with missing offsets interpreted in the dive local timezone. A recognizable editor's bare render date is ignored; a preserved/restored capture tag remains usable. Manual choice may override missing/ambiguous metadata and need not be in candidates. Processing is synchronous.
+        Uses the existing JXL photo or H.264/1080p video pipeline and stores capture provenance on the returned media. Pending original
+        is removed only after complete media publication and SQL save. Failed/interrupted work retains a durable receipt
+        and retries with the same media ID. An unfinished reservation can be redirected; an already committed assignment
+        to another dive returns 409 already_assigned.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - dive_id
+              additionalProperties: false
+              properties:
+                dive_id:
+                  type: integer
+                  format: int64
+                  minimum: 1
+  /api/v1/admin/media/pending/{pendingID}/thumbnail:
+    parameters:
+    - name: pendingID
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: ^[a-f0-9]{32}$
+    - $ref: '#/components/parameters/Range'
+    - $ref: '#/components/parameters/IfNoneMatch'
+    - $ref: '#/components/parameters/IfModifiedSince'
+    - $ref: '#/components/parameters/IfRange'
+    get:
+      tags:
+      - Pending media
+      operationId: getPendingPhotoThumbnail
+      summary: Preview a pending media
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
+      responses:
+        '200':
+          description: Private JPEG preview.
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: Invalid request or cursor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator session required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Pending media or requested dive not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: source_changed, filename_conflict, or already_assigned. The pending original is retained.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Database, filesystem or media-processing error; inspect pending item reason/error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Initial setup incomplete or pending service unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '206':
+          $ref: '#/components/responses/PartialFile'
+        '304':
+          $ref: '#/components/responses/NotModified'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '416':
+          $ref: '#/components/responses/RangeNotSatisfiable'
+      description: 'Administrator only, Cache-Control: private, no-store. Originals stay unchanged in the inbox. Byte ranges,
+        HEAD and conditional requests are supported. Lazy JPEG preview targeting 480 pixels on the shorter side without
+        upscaling, using the full HEIC decoder.'
+    head:
+      tags:
+      - Pending media
+      operationId: headPendingPhotoThumbnail
+      summary: Read pending image headers
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
+      responses:
+        '200':
+          description: Private image headers; no body.
+        '400':
+          description: Invalid request or cursor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator session required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Pending media or requested dive not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: source_changed, filename_conflict, or already_assigned. The pending original is retained.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Database, filesystem or media-processing error; inspect pending item reason/error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Initial setup incomplete or pending service unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '206':
+          $ref: '#/components/responses/PartialFile'
+        '304':
+          $ref: '#/components/responses/NotModified'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '416':
+          $ref: '#/components/responses/RangeNotSatisfiable'
+      description: 'Administrator only, Cache-Control: private, no-store. Originals stay unchanged in the inbox. Byte ranges,
+        HEAD and conditional requests are supported. Lazy JPEG preview targeting 480 pixels on the shorter side without
+        upscaling, using the full HEIC decoder.'
+  /api/v1/admin/media/pending/{pendingID}/file:
+    parameters:
+    - name: pendingID
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: ^[a-f0-9]{32}$
+    - $ref: '#/components/parameters/Range'
+    - $ref: '#/components/parameters/IfNoneMatch'
+    - $ref: '#/components/parameters/IfModifiedSince'
+    - $ref: '#/components/parameters/IfRange'
+    - $ref: '#/components/parameters/MediaImageFormat'
+    - $ref: '#/components/parameters/MediaImageAccept'
+    get:
+      tags:
+      - Pending media
+      operationId: getPendingPhotoFile
+      summary: Read a pending original or JPEG representation
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
+      responses:
+        '200':
+          description: Private original or negotiated image representation.
+          content:
+            '*/*':
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: Invalid request or cursor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator session required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Pending media or requested dive not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: source_changed, filename_conflict, or already_assigned. The pending original is retained.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Database, filesystem or media-processing error; inspect pending item reason/error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Initial setup incomplete or pending service unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '206':
+          $ref: '#/components/responses/PartialFile'
+        '304':
+          $ref: '#/components/responses/NotModified'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '416':
+          $ref: '#/components/responses/RangeNotSatisfiable'
+      description: 'Administrator only, Cache-Control: private, no-store. Originals stay unchanged in the inbox. Byte ranges,
+        HEAD and conditional requests are supported. Same format=auto/original/jpeg rules as normal photo assets; HEIC
+        auto mode receives cached JPEG.'
+    head:
+      tags:
+      - Pending media
+      operationId: headPendingPhotoFile
+      summary: Read pending image headers
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
+      responses:
+        '200':
+          description: Private image headers; no body.
+        '400':
+          description: Invalid request or cursor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator session required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Pending media or requested dive not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: source_changed, filename_conflict, or already_assigned. The pending original is retained.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Database, filesystem or media-processing error; inspect pending item reason/error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Initial setup incomplete or pending service unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '206':
+          $ref: '#/components/responses/PartialFile'
+        '304':
+          $ref: '#/components/responses/NotModified'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '416':
+          $ref: '#/components/responses/RangeNotSatisfiable'
+      description: 'Administrator only, Cache-Control: private, no-store. Originals stay unchanged in the inbox. Byte ranges,
+        HEAD and conditional requests are supported. Same format=auto/original/jpeg rules as normal photo assets; HEIC
+        auto mode receives cached JPEG.'
 components:
   securitySchemes:
     adminSession:
@@ -3256,7 +3929,7 @@ components:
           description: Garmin activity ID.
         filename:
           type: string
-          description: Retained filename. Converted photos append .jxl to the original name; exceptionally long names are shortened with a hash. Videos and small photos retain their names.
+          description: Retained filename. Converted photos append .jxl; normalized videos from non-MP4/M4V containers append .mp4. Very long names are shortened with a hash. Compatible videos and small photos retain their names.
         kind:
           type: string
           enum:
@@ -3335,6 +4008,8 @@ components:
           description: Relative versioned thumbnail URL (photo JXL with JPEG fallback, video JPEG); omitted unless thumbnail_status is ready.
         translations:
           $ref: '#/components/schemas/Translations'
+        capture:
+          $ref: '#/components/schemas/PhotoCapture'
         trip_id:
           type: string
           description: Owning trip ID; present for trip-owned media instead of dive_id.
@@ -4109,9 +4784,17 @@ components:
         max_upload_bytes:
           type: integer
           format: int64
+        pending_directory:
+          type: string
+          description: Inbox path; relative paths resolve against media.directory. Default pending.
+        pending_scan_interval:
+          type: string
+          description: Go duration from 1s through 24h; default 60s.
       required:
       - directory
       - max_upload_bytes
+      - pending_directory
+      - pending_scan_interval
     Configuration:
       type: object
       properties:
@@ -4148,3 +4831,240 @@ components:
       additionalProperties: false
       required:
       - database
+    CameraCapture:
+      type: object
+      required:
+      - local_time
+      - source
+      properties:
+        local_time:
+          type: string
+          description: Camera wall clock without a timezone, YYYY-MM-DDTHH:mm:ss with optional fraction.
+        offset:
+          type: string
+          description: Explicit UTC offset or Z; absent means interpret in the dive local timezone.
+        source:
+          type: string
+          description: Metadata tag used; filesystem dates are never used.
+    PhotoCapture:
+      type: object
+      required:
+      - local_time
+      - timezone_assumed
+      - source
+      properties:
+        local_time:
+          type: string
+        captured_at:
+          type: string
+          format: date-time
+          description: Resolved UTC instant; omitted when a manual assignment cannot resolve the local clock.
+        offset:
+          type: string
+        timezone:
+          type: string
+          description: IANA dive timezone when assumed, otherwise the explicit metadata offset.
+        timezone_assumed:
+          type: boolean
+        source:
+          type: string
+    PendingReason:
+      type: string
+      enum:
+      - waiting_for_file
+      - missing_capture_time
+      - no_matching_dive
+      - multiple_matches
+      - ambiguous_time
+      - metadata_error
+      - filename_conflict
+      - processing_error
+      - source_changed
+      - assigning
+      - matched
+    PendingCandidate:
+      type: object
+      required:
+      - dive_id
+      - name
+      - start_time
+      - end_time
+      - timezone
+      - captured_at
+      - timezone_assumed
+      - ambiguous_time
+      properties:
+        dive_id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        start_time:
+          type: string
+          format: date-time
+        end_time:
+          type: string
+          format: date-time
+        timezone:
+          type: string
+        captured_at:
+          type: string
+          format: date-time
+        timezone_assumed:
+          type: boolean
+        ambiguous_time:
+          type: boolean
+          description: Repeated local clock hour during a timezone transition; requires manual assignment.
+    PendingItem:
+      type: object
+      required:
+      - id
+      - filename
+      - kind
+      - size_bytes
+      - sha256
+      - capture
+      - reason
+      - candidates
+      - state
+      - created_at
+      - updated_at
+      - url
+      - thumbnail_url
+      properties:
+        id:
+          type: string
+        filename:
+          type: string
+        kind:
+          type: string
+          enum: [photo, video]
+        size_bytes:
+          type: integer
+          format: int64
+        sha256:
+          type: string
+          description: Empty until the file has settled and been hashed.
+        capture:
+          type: object
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/CameraCapture'
+        reason:
+          $ref: '#/components/schemas/PendingReason'
+        error:
+          type: string
+        candidates:
+          type: array
+          items:
+            $ref: '#/components/schemas/PendingCandidate'
+        state:
+          type: string
+          enum:
+          - pending
+          - assigning
+        target_dive_id:
+          type: integer
+          format: int64
+        media_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        url:
+          type: string
+        thumbnail_url:
+          type: string
+          description: Private lazy preview; a newly copied/changed file may return 409 until indexed.
+    PendingList:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PendingItem'
+        next_cursor:
+          type: string
+    PendingScanResult:
+      type: object
+      required:
+      - scanned
+      - assigned
+      - pending
+      - removed
+      - skipped
+      - failed
+      properties:
+        scanned:
+          type: integer
+          minimum: 0
+        assigned:
+          type: integer
+          minimum: 0
+        pending:
+          type: integer
+          minimum: 0
+        removed:
+          type: integer
+          minimum: 0
+        skipped:
+          type: integer
+          minimum: 0
+        failed:
+          type: integer
+          minimum: 0
+    PendingScanStatus:
+      type: object
+      required:
+      - running
+      - result
+      properties:
+        running:
+          type: boolean
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        result:
+          $ref: '#/components/schemas/PendingScanResult'
+        error:
+          type: string
+    PendingStatus:
+      type: object
+      required:
+      - total
+      - reasons
+      - directory
+      - scan_interval_seconds
+      - match_window_seconds
+      - settle_seconds
+      - scan
+      properties:
+        total:
+          type: integer
+          format: int64
+        reasons:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int64
+        directory:
+          type: string
+        scan_interval_seconds:
+          type: number
+          example: 60
+        match_window_seconds:
+          type: integer
+          example: 600
+        settle_seconds:
+          type: integer
+          example: 2
+        scan:
+          $ref: '#/components/schemas/PendingScanStatus'

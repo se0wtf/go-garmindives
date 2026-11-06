@@ -40,7 +40,7 @@ docker run -d --name go-garmindives \
 ```
 
 The image includes FFmpeg/FFprobe, JPEG XL encoder/decoder (`cjxl`, `djxl`),
-libheif tools with the libde265 HEVC decoder, TLS certificates, and timezone data.
+libheif tools with the libde265 HEVC decoder, ExifTool, TLS certificates, and timezone data.
 It runs as UID/GID **10001:10001**. With default
 settings, `/data` contains `config.yaml`, SQLite `dives.db`, and the `assets/`
 directory. Mount the whole configuration directory so atomic YAML saves work.
@@ -900,7 +900,9 @@ assets/
     Reef 360.MP4
 ```
 
-Videos and small photos preserve their filenames, capitalization, and bytes.
+Compatible H.264/AAC videos within 1080p bounds and small photos preserve their
+filenames, capitalization, and bytes. Other videos are normalized to H.264/AAC
+MP4 without upscaling; non-MP4 names append `.mp4` (e.g. `Reef.mov.mp4`).
 Converted photos append `.jxl` to the source filename, for example
 `Turtle original.jpeg.jxl`; exceptionally long names are shortened with a hash
 to fit the filename limit. Filenames must be
@@ -1031,8 +1033,8 @@ seeking, ETags, and conditional requests. Directory browsing is disabled. If an
 original changed on disk since indexing, serving returns `409 media_changed`
 until a rescan refreshes its metadata and validators.
 
-**360-degree videos** retain their complete original container and spherical
-metadata. New media uses `projection: "auto"`: explicit spherical mapping metadata
+**360-degree videos** preserve the complete panorama and spherical presentation
+hints during normalization; SQL retains the projection metadata. New media uses `projection: "auto"`: explicit spherical mapping metadata
 identifies full equirectangular/cubemap 360 footage. A wide aspect ratio or filename
 alone does not mark a file as 360. `effective_projection` resolves to `flat`, `180`,
 or `360` so the frontend can choose its player; `projection_format` identifies
@@ -1050,16 +1052,56 @@ the frontend. Photo perspective previews target a 480-pixel shorter side without
 upscaling. Other projection formats keep a scaled decoded frame. Stereo layout
 fields remain optional for stereoscopic footage; ordinary 360 video needs no stereo
 setting. Originals are served with byte ranges for the frontend's 360 player.
-The server does not stitch raw camera footage or convert playback formats.
+The server normalizes video playback to H.264/AAC MP4, but does not stitch raw
+camera footage. The 1080p landscape limit makes a 2:1 panorama at most 1920x960.
 For reliable panoramic previews and browser playback, use a stitched equirectangular
-MP4/MOV export from your camera software. Raw `.insv`/`.360` files are retained and
-served, with preview availability depending on FFmpeg's support for that format.
+MP4/MOV export from your camera software. Raw multiple-stream `.insv`/`.360`
+footage requires stitching before conversion; failures retain the source.
 
 The `dive_media` table stores metadata only. Back up **both the database and assets
-directory** to retain your media. Photo conversion replaces eligible originals
-with the retained JXL; keep a separate source backup if desired. Removing an attachment through the API deletes
+directory** to retain your media. Photo/video conversion replaces eligible originals
+with the retained JXL/MP4; keep a separate source backup if desired. Removing an attachment through the API deletes
 its files; deleting an entire dive from SQL cascades its media metadata but leaves
 the originals available for a later reimport.
+
+## Pending media inbox
+
+Drop original photos or videos into `<assets_dir>/pending` (`/assets/pending` for an assets
+root of `/assets`, or `/data/assets/pending` in the default Docker setup). Serve
+scans it at startup and every **60 seconds**. A file must settle before import;
+for slow copies use a hidden temporary filename, then rename it into place.
+
+Capture time is read from EXIF/XMP/GPS metadata. A missing timezone is interpreted
+in the **dive's local timezone**. Exactly one matching dive in the inclusive
+**start − 10 minutes through end + 10 minutes** window is assigned automatically.
+Ambiguous/missing dates, no match, filename conflicts and processing failures stay
+pending for the administrator. Current SQL dives are reconsidered on every pass,
+so a later sync can resolve a waiting photo. Filesystem dates are not capture dates.
+
+Assignment uses normal JXL photo processing or H.264/1080p video conversion and thumbnails. The pending original is removed
+only after completed processing and SQL save; capture metadata is retained as
+`media.capture`. A recorded import recovers safely after interruption.
+
+All inbox routes require an admin session under `/api/v1/admin/media/pending`:
+
+| Method/path | Purpose |
+| --- | --- |
+| GET root | List media kind, capture dates, reasons and candidate dives; `limit`, `cursor`, `reason` |
+| GET `/status` | Counts and scan status |
+| POST `/scan` | Queue scan; optional `?force=true` |
+| GET `/{id}` | Read one pending item |
+| GET/HEAD `/{id}/thumbnail` or `/{id}/file` | Private preview/original |
+| POST `/{id}/assign` | Manually assign with `{"dive_id":123456789}` |
+| DELETE `/{id}` | Delete pending media |
+
+YAML `media.pending_directory` defaults to `pending`, relative to the assets root;
+absolute paths work too. `media.pending_scan_interval` defaults to `60s`.
+ENV overrides are `GARMIN_PENDING_DIR` and `GARMIN_PENDING_SCAN_INTERVAL`.
+Local builds need `brew install exiftool` or `apt-get install libimage-exiftool-perl`;
+the Docker image already includes it. Resolve exports with only a render date
+remain pending; a preserved/restored capture tag enables matching. See the
+[full inbox specification](docs/specs/pending-media.md) and
+[video encoding profile](docs/specs/video-processing.md).
 
 ## Development
 

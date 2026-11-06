@@ -57,6 +57,29 @@ func TestYAMLSettingsEnvironmentPrecedenceAndRelativePaths(t *testing.T) {
 	}
 }
 
+func TestPendingConfigurationPathsAndEnvironment(t *testing.T) {
+	clearApplicationEnvironment(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	file := appconfig.Default()
+	resolved, err := appconfig.Resolve(path, file)
+	if err != nil || resolved.PendingDirectory() != filepath.Join(dir, "assets", "pending") || resolved.Effective.Media.PendingScanInterval != "60s" {
+		t.Fatalf("pending defaults: %+v %v", resolved, err)
+	}
+	t.Setenv("GARMIN_PENDING_DIR", filepath.Join(dir, "inbox"))
+	t.Setenv("GARMIN_PENDING_SCAN_INTERVAL", "90s")
+	resolved, err = appconfig.Resolve(path, file)
+	if err != nil || resolved.PendingDirectory() != filepath.Join(dir, "inbox") || resolved.Overrides["media.pending_scan_interval"] != "GARMIN_PENDING_SCAN_INTERVAL" || resolved.File.Media.PendingScanInterval != "60s" {
+		t.Fatal("pending ENV precedence failed")
+	}
+	for _, value := range []string{"0s", "-1s", "48h", "invalid"} {
+		t.Setenv("GARMIN_PENDING_SCAN_INTERVAL", value)
+		if _, err := appconfig.Resolve(path, file); err == nil {
+			t.Fatalf("invalid interval accepted: %s", value)
+		}
+	}
+}
+
 func TestAdminConfigurationRequiresRestartAndRedactsConnectionSecrets(t *testing.T) {
 	a, c := bootstrapApplication(t)
 	setupApplication(t, a, c)

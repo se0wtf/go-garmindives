@@ -42,11 +42,12 @@ type mediaItem struct {
 	URL                  string          `json:"url"`
 	ThumbnailURL         string          `json:"thumbnail_url,omitempty"`
 	Translations         translations    `json:"translations"`
+	Capture              *photoCapture   `json:"capture,omitempty"`
 }
 
 const mediaColumns = `id, dive_id, filename, kind, content_type, size_bytes, modified_ns,
 	sha256, width, height, duration_seconds, stereo_layout, detected_stereo_layout,
-	projection, caption, description, thumbnail_status, thumbnail_error, thumbnail_key, probe_json, created_at, updated_at, favorite`
+	projection, caption, description, thumbnail_status, thumbnail_error, thumbnail_key, probe_json, created_at, updated_at, favorite, capture_json`
 
 func scanMedia(row rowScanner) (mediaItem, error) {
 	return scanOwnedMedia(row, mediaOwner{})
@@ -54,7 +55,7 @@ func scanMedia(row rowScanner) (mediaItem, error) {
 
 func scanOwnedMedia(row rowScanner, owner mediaOwner) (mediaItem, error) {
 	var m mediaItem
-	var probe string
+	var probe, capture string
 	var ownerID any = &m.DiveID
 	if owner.TripID != "" {
 		ownerID = &m.TripID
@@ -62,7 +63,7 @@ func scanOwnedMedia(row rowScanner, owner mediaOwner) (mediaItem, error) {
 	err := row.Scan(&m.ID, ownerID, &m.Filename, &m.Kind, &m.ContentType, &m.SizeBytes,
 		&m.ModifiedNS, &m.SHA256, &m.Width, &m.Height, &m.DurationSeconds, &m.StereoLayout,
 		&m.DetectedStereoLayout, &m.Projection, &m.Caption, &m.Description, &m.ThumbnailStatus,
-		&m.ThumbnailError, &m.ThumbnailKey, &probe, &m.CreatedAt, &m.UpdatedAt, &m.Favorite)
+		&m.ThumbnailError, &m.ThumbnailKey, &probe, &m.CreatedAt, &m.UpdatedAt, &m.Favorite, &capture)
 	if errors.Is(err, sql.ErrNoRows) {
 		return m, errMediaNotFound
 	}
@@ -70,6 +71,11 @@ func scanOwnedMedia(row rowScanner, owner mediaOwner) (mediaItem, error) {
 		return m, err
 	}
 	m.Probe = json.RawMessage(probe)
+	if capture != "{}" && capture != "null" {
+		if err := json.Unmarshal([]byte(capture), &m.Capture); err != nil {
+			return m, err
+		}
+	}
 	m.setURLs()
 	return m, nil
 }
@@ -91,6 +97,9 @@ func (m *mediaItem) resolveProjection() {
 	probe, err := mediaproc.DecodeProbe(m.Probe)
 	if photo := m.photoState(); photo.Version == photoProfileVersion && photo.Projection != "" {
 		probe.Projection, probe.ProjectionFormat = photo.Projection, photo.ProjectionFormat
+	}
+	if video := m.videoState(); video.Version == videoProfileVersion && video.Projection != "" {
+		probe.Projection, probe.ProjectionFormat = video.Projection, video.ProjectionFormat
 	}
 	if err == nil {
 		m.ProjectionFormat = probe.ProjectionFormat
@@ -170,7 +179,7 @@ func (s *sqlStore) ownedMediaByFilename(ctx context.Context, owner mediaOwner, n
 func (s *sqlStore) saveMedia(ctx context.Context, m mediaItem) error {
 	owner := m.owner()
 	_, err := s.db.ExecContext(ctx, s.bind(`INSERT INTO `+owner.table()+` (`+owner.columns()+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET filename=excluded.filename, kind=excluded.kind,
 		content_type=excluded.content_type, size_bytes=excluded.size_bytes, modified_ns=excluded.modified_ns,
 		sha256=excluded.sha256, width=excluded.width, height=excluded.height,
@@ -178,11 +187,11 @@ func (s *sqlStore) saveMedia(ctx context.Context, m mediaItem) error {
 		detected_stereo_layout=excluded.detected_stereo_layout, projection=excluded.projection,
 		caption=excluded.caption, description=excluded.description, thumbnail_status=excluded.thumbnail_status,
 		thumbnail_error=excluded.thumbnail_error, thumbnail_key=excluded.thumbnail_key,
-		probe_json=excluded.probe_json, updated_at=excluded.updated_at,favorite=excluded.favorite`),
+		probe_json=excluded.probe_json, updated_at=excluded.updated_at,favorite=excluded.favorite,capture_json=excluded.capture_json`),
 		m.ID, owner.value(), m.Filename, m.Kind, m.ContentType, m.SizeBytes, m.ModifiedNS,
 		m.SHA256, m.Width, m.Height, m.DurationSeconds, m.StereoLayout, m.DetectedStereoLayout,
 		m.Projection, m.Caption, m.Description, m.ThumbnailStatus, m.ThumbnailError, m.ThumbnailKey,
-		string(m.Probe), m.CreatedAt, m.UpdatedAt, boolNumber(m.Favorite))
+		string(m.Probe), m.CreatedAt, m.UpdatedAt, boolNumber(m.Favorite), captureJSON(m.Capture))
 	if err == nil {
 		s.translationsChanged()
 	}

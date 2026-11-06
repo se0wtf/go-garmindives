@@ -265,6 +265,7 @@ Usage: go-garmindives serve [options]
 Configuration precedence: flags > ENV > YAML > defaults.
 Environment: GARMIN_CONFIG GARMIN_DB_TYPE GARMIN_DB_URI GARMIN_OUTPUT_TYPE GARMIN_OUTPUT_DSN GARMIN_API_ADDR
 GARMIN_ASSETS_DIR GARMIN_MEDIA_MAX_UPLOAD_BYTES GARMIN_COOKIE_SECURE GARMIN_PUBLIC_URL
+GARMIN_PENDING_DIR GARMIN_PENDING_SCAN_INTERVAL
 GARMIN_SESSION_LIFETIME GARMIN_SESSION_IDLE_TIMEOUT DEEPL_API_KEY DEEPL_TARGET_LANG DEEPL_REQUEST_INTERVAL
 DEEPL_API_URL DEEPL_GLOSSARY_ID GARMIN_GEOCODING_ENABLED GARMIN_GEOCODING_URL
 GARMIN_GEOCODING_INTERVAL GARMIN_GEOCODING_USER_AGENT LOG_LEVEL`)
@@ -284,7 +285,7 @@ GARMIN_GEOCODING_INTERVAL GARMIN_GEOCODING_USER_AGENT LOG_LEVEL`)
 	}
 	c.Effective.Database = appconfig.Database{Type: strings.ToLower(strings.TrimSpace(*kind)), URI: strings.TrimSpace(*uri)}
 	c.Effective.HTTP.Listen = *listen
-	c.Effective.Media = appconfig.Media{Directory: *assets, MaxUploadBytes: parsedUpload}
+	c.Effective.Media.Directory, c.Effective.Media.MaxUploadBytes = *assets, parsedUpload
 	fields := map[string]string{"output-type": "database.type", "output-dsn": "database.uri", "listen": "http.listen", "assets-dir": "media.directory", "media-max-upload-bytes": "media.max_upload_bytes"}
 	flags.Visit(func(f *flag.Flag) {
 		if key := fields[f.Name]; key != "" {

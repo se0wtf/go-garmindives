@@ -53,10 +53,13 @@ the API to a different effective value.
 | auth.idle_timeout | GARMIN_SESSION_IDLE_TIMEOUT | 2h; at least 1 minute, no greater than lifetime |
 | media.directory | GARMIN_ASSETS_DIR | assets; nonempty |
 | media.max_upload_bytes | GARMIN_MEDIA_MAX_UPLOAD_BYTES | 16 GiB; positive integer, at most 2^60 |
+| media.pending_directory | GARMIN_PENDING_DIR | pending; relative to media.directory, or absolute; must not overlap owners/internal directories |
+| media.pending_scan_interval | GARMIN_PENDING_SCAN_INTERVAL | 60s; Go duration between 1s and 24h |
 
 Duration strings follow Go duration syntax, such as `2s`, `15s`, `2h`, `24h`;
 there is no `1d` spelling. A compatible port must parse these deployed values.
-Relative paths in configuration/ENV resolve against the YAML directory, including
+The pending directory is relative to the resolved media root. Other relative
+paths in configuration/ENV resolve against the YAML directory, including
 relative `file:` SQLite URIs with preserved query options. Serve's relative
 `-output-dsn` also resolves there; sync's explicit relative `-output-dsn` is passed
 relative to its working directory. Use absolute command-line paths across roles.

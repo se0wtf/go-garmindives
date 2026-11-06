@@ -53,7 +53,7 @@ The root [Dockerfile](../../Dockerfile) builds with Go 1.26 on Debian Trixie and
 copies a static application binary into Alpine 3.24. Runtime packages are
 `ca-certificates`, `ffmpeg` (including FFprobe), `libjxl-tools` (cjxl/djxl),
 `libheif-tools` with `libheif-libde265` for HEIC primary-image decoding, and
-`tzdata`, with their package-manager-resolved shared libraries. No Go toolchain or
+`exiftool` for capture metadata, plus `tzdata`, with their package-manager-resolved shared libraries. No Go toolchain or
 SQL client/server library is required in the final image. The
 [build context allowlist](../../.dockerignore) excludes local settings, credentials,
 databases, media, Git/editor state, and test fixtures.
@@ -90,6 +90,7 @@ budget; worker cancellation and lease cleanup follow.
 | Garmin sync | Explicit command or external scheduler | Garmin; default 2-second pacing |
 | Startup assets scan | Each successful serve activation | Local disk / FFmpeg |
 | Later assets scan | Admin POST scan, optional force=true | Local disk / FFmpeg |
+| Pending media inbox | Startup background pass, then every 60 seconds by default; admin queued scan | Local filesystem / ExifTool / media tools; no Garmin |
 | Country/trip reconciliation | Startup, domain transactions, approximately every 30 seconds | SQL only |
 | Country provider | Referenced queued coordinates while serve runs | Nominatim; default 15-second database-wide gate |
 | Translation discovery | Startup, edits, approximately every 30 seconds | SQL only |
@@ -161,14 +162,16 @@ Use `brew install ffmpeg jpeg-xl libheif` on macOS or
 `apt-get install ffmpeg libjxl-tools libheif-examples libheif-plugin-libde265`
 on Debian/Ubuntu. FFmpeg need not include a
 JPEG XL codec: JXL decoding is handled explicitly by djxl. CI installs these tools
-to exercise actual encoding and decoding.
+to exercise actual encoding and decoding. Video conversion requires libx264/AAC;
+HDR-to-SDR conversion also requires zscale/tonemap, included in Docker. Missing
+components leave the source intact with an error; there is no HDR color fallback.
 HEIC inspection, resizing and JPEG fallback use the complete libheif-decoded
 image, including grid assembly and orientation. They never fall back to a single
 FFmpeg video stream. Multiple top-level images are retained with a processing
 error. Rebuild the Docker image to pick up the HEIF runtime packages.
 
 Startup and admin scans apply the [photo profile](backend.md#filesystem-media-lifecycle)
-to existing photos as well as new imports. Eligible source photos are deleted
+and [video profile](video-processing.md) to existing media as well as new imports. Eligible source photos are deleted
 after verified JXL/master thumbnail publication and SQL success. Keep a separate
 source archive if needed. Rescans reuse completed masters without re-encoding.
 `.photo-jobs` and `.uploads` can contain pending recovery data; retain these with
@@ -184,11 +187,11 @@ HEIF decoder versioning refreshes legacy previews/fallbacks even for small HEICs
 whose original bytes remain unchanged.
 
 API uploads default to 16 GiB per file, plus a bounded multipart overhead allowance.
-Upload/asset handlers extend the read deadline to one hour and clear the normal
+Media/asset handlers extend the read deadline to one hour and clear the normal
 30-second write timeout. Configure proxy body/time limits consistently; the proxy
 must not reject a permitted large file first. The general server header/read/write/
-idle timeouts are 5/15/30/60 seconds. Each media tool invocation has a two-minute
-timeout. Photo conversion uses several decode/resize/encode/verification steps,
+idle timeouts are 5/15/30/60 seconds. Metadata, probe and thumbnail invocations have a two-minute
+timeout; video conversion has a six-hour limit. Photo conversion uses several decode/resize/encode/verification steps,
 so initial scans and synchronous uploads can take longer than a single timeout.
 
 Copy filesystem imports using a hidden temporary name, then rename into the owner
@@ -196,6 +199,12 @@ directory when complete. Scan explicitly after copying during runtime; there is 
 watcher. Use force=true when content changed with unchanged size/mtime. Missing
 originals prune metadata and covers. Restoring SQL before its matching media files
 and immediately starting serve can therefore prune restored attachment metadata.
+
+The pending inbox is polled automatically; normal activity directories still need
+their explicit scan after runtime copies. Install `exiftool` locally through
+Homebrew or `libimage-exiftool-perl` on Debian/Ubuntu. Docker includes it. The
+[inbox guide](pending-media.md) covers private APIs, timezone assumptions and
+recovery. Upgrade both serve/sync roles for schema 12.
 
 ## Observability and recovery
 

@@ -4,8 +4,8 @@ This is the product and implementation specification for a personal, bilingual
 diving logbook. It is intended both for an agent building the frontend and for an
 engineer implementing a compatible backend in another language.
 
-Baseline: backend commit `54aefed`, SQL schema **11**, application configuration
-version **1**, decoded FIT document version **1**, photo processing profile **1**, HTTP API `/api/v1`.
+Baseline: SQL schema **12**, application configuration
+version **1**, decoded FIT document version **1**, photo processing profile **1**, video processing profile **1**, HTTP API `/api/v1`.
 These documents describe implemented behavior, not a proposed roadmap.
 
 ## Reading paths
@@ -18,6 +18,10 @@ These documents describe implemented behavior, not a proposed roadmap.
 
 For source navigation and package responsibilities, see
 [repository organization](docs/specs/repository.md).
+The [pending media inbox](docs/specs/pending-media.md) describes capture-time assignment,
+private review, configuration, and interrupted-import recovery.
+The [video processing specification](docs/specs/video-processing.md) defines H.264/1080p
+normalization, edited GoPro timestamps, 360 behavior and source cleanup.
 
 The specification is a package. Prose defines concepts, ownership, algorithms,
 and lifecycle; OpenAPI defines the exact HTTP field names, nullability, enums,

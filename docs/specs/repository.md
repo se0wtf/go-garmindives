@@ -20,6 +20,9 @@ internal/
     sync*.go, destination.go    import selection and transactional destination
     trips.go, dive_patch.go     trip grouping and local dive metadata
     media*.go, cover.go         filesystem library, ownership and cover selection
+    media_video.go              video normalization and recoverable publication
+    pending*.go                 inbox worker, capture-time matching and lifecycle tests
+    sqlstore_pending*.go        inbox persistence and migration
     country_worker.go           persistent geocoding work and travel reconciliation
     translation_worker.go       persistent translation work and cache assembly
     *_test.go, testdata/         domain/API/storage integration tests and fixtures
@@ -28,7 +31,7 @@ internal/
   fit/                          FIT containers, decoder and lossless document types
   garminhttp/                    Garmin request pacing/retries and focused tests
   geocoding/                     Nominatim configuration and HTTP adapter
-  media/                         FFprobe/FFmpeg, full-image HEIF decoding, and JPEG XL processing
+  media/                         FFprobe/FFmpeg, H.264 video, HEIF/JXL and ExifTool capture metadata
   notes/                         pure French note parser
   security/                      administrator password policy and Argon2id
   translation/                   DeepL configuration and HTTP adapter

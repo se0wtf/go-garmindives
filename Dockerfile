@@ -15,6 +15,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/go-garmindives .
 FROM alpine:3.24 AS runtime
 
 # ffmpeg includes ffprobe; libjxl-tools supplies cjxl and djxl and their libraries.
+# Alpine FFmpeg includes libx264/AAC and zscale/tonemap for SDR/HDR video conversion.
 # libheif-tools plus libde265 reconstruct complete HEIC photos instead of HEVC tiles.
 RUN apk add --no-cache \
         ca-certificates \
@@ -28,7 +29,7 @@ RUN apk add --no-cache \
     && chown 10001:10001 /data /tokens
 
 # Keep optional-format decoders separate so changes reuse the larger media layer.
-RUN apk add --no-cache libheif-tools libheif-libde265
+RUN apk add --no-cache libheif-tools libheif-libde265 exiftool
 
 COPY --from=build /out/go-garmindives /usr/local/bin/go-garmindives
 

@@ -348,4 +348,5 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	t.Run("photo SQL conversion", func(t *testing.T) {
 		exercisePhotoSQLConversion(t, store)
 	})
+	t.Run("pending photo imports", func(t *testing.T) { exercisePendingPostgres(t, store) })
 }

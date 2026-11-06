@@ -250,3 +250,40 @@ Reference evidence: [SQL storage](../../internal/app/sqlstore_test.go), [OpenAPI
 [PostgreSQL/live integration entry points](../../internal/app/integration_test.go).
 The existing suite requires real Garmin credentials only for explicitly enabled
 live tests; acceptance work should normally run without external account access.
+
+## Pending media inbox
+
+| ID | Fixture / action | Expected |
+| --- | --- | --- |
+| P01 | Unzoned capture within one dive window | Interpret in dive timezone; import and persist assumed timezone/UTC capture |
+| P02 | Exactly 10 minutes before start or after end; just outside | Inclusive boundaries match; outside remains pending |
+| P03 | Overlapping windows, different local timezones, repeated DST hour | Keep pending with candidates/ambiguity reason; no nearest-dive guess |
+| P04 | Missing/invalid capture or no matching dive | Private review; file timestamps ignored; later sync can resolve a cached capture |
+| P05 | Copy in progress, replacement, symlink, unsafe inbox path | Settle/check source; preserve newer/external bytes; reject overlapping roots |
+| P06 | Filename conflict or codec/SQL failure | No overwrite or incomplete media row; pending original retained; retry same reserved ID |
+| P07 | Crash before/after media commit | Recover stable identity/capture; no duplicate; cleanup retains a newer inbox replacement |
+| P08 | Unauthenticated GET/HEAD/ranges/list/assign/delete | 401; pending bytes never available through public assets |
+| P09 | Admin list/filter/cursor/preview/manual assignment/delete | Correct pagination, private previews, explicit target may override metadata, cleanup on success |
+| P10 | Real HEIC capture metadata plus tiled/rotated source | ExifTool date matches local dive; complete JXL image and preserved SQL capture |
+| P11 | Worker startup/manual wake/shutdown; SQLite/PostgreSQL | Background imports complete without blocking reads; clean cancellation and both SQL dialects |
+
+Evidence: [capture reader](../../internal/media/capture_test.go),
+[matching](../../internal/app/pending_match_test.go),
+[lifecycle](../../internal/app/pending_test.go),
+[admin API](../../internal/app/pending_http_test.go).
+
+## Video normalization
+
+| ID | Fixture / action | Expected |
+| --- | --- | --- |
+| V01 | Compatible H.264/AAC MP4 within limits | Original bytes/name retained; thumbnail created; forced scan does not recompress |
+| V02 | 4K, portrait, HEVC, MOV with PCM audio | Correct 1080p bounds, H.264/yuv420p, AAC tracks retained; only needed streams re-encoded |
+| V03 | Rotated, anamorphic, interlaced, PQ/HLG input | Correct display orientation/aspect; square pixels; deinterlace and SDR BT.709 when needed |
+| V04 | Encoder/thumbnail/SQL failure or interruption | Original retained; uncommitted output rolled back; committed output cleanup recovers with stable ID |
+| V05 | Pending capture date / Resolve render date only | Confident capture matches; render-only metadata stays pending; private previews/manual assignment work |
+| V06 | 360 panorama conversion and forced scan | Complete panorama/aspect preserved; SQL projection/stereo hints survive |
+| V07 | Trip upload/scan or filename collision | Same profile, stable editorial metadata; no unrelated destination overwrite |
+
+Evidence: [encoder tests](../../internal/media/video_test.go),
+[upload/scan tests](../../internal/app/media_video_test.go),
+[pending videos](../../internal/app/pending_video_test.go).

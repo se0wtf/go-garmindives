@@ -31,7 +31,7 @@ the indexed summaries/samples. Retain the cached data for future offline decodin
 ## Relational schema
 
 [schema.sqlite.sql](schema.sqlite.sql) was exported from a fresh, fully migrated
-schema-11 database without user rows. It includes all columns, checks, foreign
+schema-12 database without user rows. It includes all columns, checks, foreign
 keys, explicit indexes, migration markers, and the initial pacing singleton. It
 is a reference snapshot, **not** a script to apply over an existing installation.
 Do not run it to upgrade a database or to create fake setup credentials.
@@ -45,6 +45,7 @@ Do not run it to upgrade a database or to create fake setup credentials.
 | dive_alerts | dive_id + alert_index | Recognized alerts / raw source data |
 | dive_fit_files | dive_id + file_index | Exact original FIT bytes, filename, size, SHA-256 |
 | dive_media | random ID | Dive-owned attachments; unique dive_id + filename |
+| pending_media | random ID / unique filename | Private inbox metadata, candidates and assignment receipts |
 | home_countries | random ID | Inclusive dated residence; overlap enforced by serialized application logic |
 | dive_trips | random ID | Editorial trip, override flags, dates, soft deletion, anchor dive |
 | trip_media | random ID | Trip-owned attachments; unique trip_id + filename |
@@ -97,7 +98,7 @@ permits forward references and is not directly PostgreSQL executable.
 ## Transactions and concurrency
 
 Migrations run one version per transaction, marking that version only after its
-DDL/backfill succeeds. A database newer than schema 11 is rejected. Fresh databases
+DDL/backfill succeeds. A database newer than schema 12 is rejected. Fresh databases
 apply every version; upgrades apply only missing versions. Concurrent deployment
 should avoid racing multiple migration processes; the reference does not expose a
 separate production migrate command or a general distributed migration coordinator.
@@ -115,6 +116,7 @@ separate production migrate command or a general distributed migration coordinat
 | 9 | Translation cache and worker state |
 | 10 | Countries, residence, trips, trip media, favorites, geocoding queue/pacing |
 | 11 | Single administrator and SQL sessions |
+| 12 | Pending media inbox/assignment receipts; capture_json on both media owner tables |
 
 FIT migration rejects invalid/empty/oversized retained bytes and rolls back that
 migration. FIT readback verifies size and SHA-256 before decoding. Keep the original
@@ -147,6 +149,7 @@ provider synchronously.
 /config/config.yaml
 /data/dives.db                 # SQLite deployment; PostgreSQL uses its own volume
 /assets/
+  pending/<original photo or video>
   <activity-id>/<retained filename>
   trips/<trip-id>/<retained filename>
   .thumbnails/<versioned-key>.jxl  # photos
@@ -179,7 +182,12 @@ preserving their original bytes/checksum. Completed HEIF thumbnails include a
 `heif-primary-v1` key component; direct HEIC JPEG fallbacks similarly prefix their
 source checksum to avoid serving old tile-only cached images.
 
+Videos similarly use `garmindives_video` with `version: 1`, source filename/checksum
+and retained projection/format/stereo hints. This uses the existing probe_json and
+requires no SQL migration. See [video publication](video-processing.md#publication-recovery-and-operation).
+
 Recovery journals record owner, media ID, source/target paths and checksums,
+optional kind (`video`, otherwise legacy photo),
 thumbnail key, and any backup/obsolete master. Journals and publication directories
 are synchronized before committing metadata or deleting source bytes. A scan
 finishes cleanup when SQL identifies the committed master and thumbnail; otherwise

@@ -68,7 +68,7 @@ func TestOpenAPIDocumentsEveryAPIRoute(t *testing.T) {
 	routes := map[string]bool{}
 	// Read actual route registration, so new endpoints cannot silently be left
 	// out of the frontend contract. Documentation/static UI routes are excluded.
-	for _, filename := range []string{"http.go", "http_media.go", "http_translations.go", "http_travel.go", "application.go", "http_auth.go", "http_admin_countries.go", "http_admin_fit.go"} {
+	for _, filename := range []string{"http.go", "http_media.go", "http_translations.go", "http_travel.go", "application.go", "http_auth.go", "http_admin_countries.go", "http_admin_fit.go", "http_admin_pending.go"} {
 		file, err := parser.ParseFile(token.NewFileSet(), filename, nil, 0)
 		if err != nil {
 			t.Fatal(err)
@@ -170,6 +170,7 @@ func TestOpenAPISchemasMatchResponseFields(t *testing.T) {
 		"RecordMetadata": recordMetadata{}, "DiveSample": diveSampleAPIResponse{},
 		"DiveList": diveListResponse{}, "DiveYears": diveYearsResponse{}, "SampleList": sampleListResponse{},
 		"MediaItem": mediaItem{}, "MediaList": mediaListResponse{}, "MediaScanResult": mediaScanResult{},
+		"PhotoCapture": photoCapture{}, "PendingItem": pendingItem{}, "PendingCandidate": pendingCandidate{}, "PendingList": pendingListResponse{}, "PendingScanResult": pendingScanResult{}, "PendingScanStatus": pendingScanStatus{}, "PendingStatus": pendingStatusResponse{},
 		"ErrorResponse":  httpx.ErrorResponse{},
 		"DiveCoverPhoto": diveCoverPhoto{},
 		"Translations":   translations{}, "EnglishTranslation": englishTranslation{}, "TranslationStatus": translationStatus{},

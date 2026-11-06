@@ -387,6 +387,11 @@ search index atomically and only if the source still matches.
 
 ## Filesystem media lifecycle
 
+The [pending inbox algorithm](pending-media.md#capture-time-and-matching) specifies
+time normalization, inclusive windows, ambiguity and publication receipts. Inbox
+imports use a reserved media ID/capture record; strict failures do not publish
+incomplete media rows. Later owner-directory rescans preserve capture_json.
+
 Use a confined filesystem root; no symlink traversal or user-controlled shell
 commands. Scan only direct regular files of known dive/trip owners. Unknown owner
 directories are left for later. Hidden files, nested directories, invalid names,
@@ -395,9 +400,9 @@ its prior index. A missing known directory can remove its indexed attachments.
 Soft-deleted trips retain indexed media and files, although active routes reject them.
 
 For each eligible file, skip only if size+mtime match, thumbnail is ready/present,
-and its cache key matches current processing options. Photos also require the
+and its cache key matches current processing options. Photos and videos also require the
 current processing marker. Otherwise hash bytes,
-inspect, process the photo if needed, generate preview, verify the same file identity/size/mtime still exists,
+inspect, apply the photo or [video profile](video-processing.md) if needed, generate preview, verify the same file identity/size/mtime still exists,
 then upsert metadata. Preserve attachment ID, original creation time, caption,
 description, favorite, and explicit projection/stereo overrides. Processing failure
 records thumbnail error but keeps the original; a file changed during processing
@@ -408,9 +413,8 @@ Uploads stream to `.uploads/<random-id>`, enforce max+1 byte check and nonempty
 content, validate the complete multipart body, then publish atomically without
 overwrite (reference implementation uses a hard link within the same root).
 Confirm the owner exists and serialize media mutation/indexing within the serve
-process. Index after publication. Complete photo uploads remain on disk on indexing/SQL
-error so a later scan can recover their source; video publication is rolled back
-on indexing error.
+process. Index after publication. Complete photo/video uploads remain on disk on indexing/SQL
+error so a later scan can recover their source and publication intent.
 Deletion stages an original into hidden trash, deletes SQL metadata, then removes
 trash/preview; on SQL failure restore the original best-effort. These are not
 cross-resource ACID transactions; rescanning repairs recoverable discrepancies.
@@ -418,6 +422,7 @@ cross-resource ACID transactions; rescanning repairs recoverable discrepancies.
 FFprobe reads the first usable video/image stream, retaining probe JSON, dimensions,
 duration, stereo hints, and spherical mapping. Probe and thumbnail commands each
 have a 2-minute timeout, bounded diagnostic output, and no shell interpolation.
+Video conversion has a six-hour limit and writes streamable MP4 into a staged file.
 Linux/macOS reference passes an already confined file descriptor (`/dev/fd/3`).
 For videos, select a representative frame using FFmpeg thumbnail=30. Crop one eye for
 side-by-side/top-bottom; use 640x360 perspective (90° horizontal, 60° vertical)

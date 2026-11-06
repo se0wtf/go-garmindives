@@ -254,8 +254,12 @@ unescaped filenames. Use thumbnail only when available. A failed thumbnail can
 fall back to original for supported photos or a placeholder/download for video.
 Photo upload and scan can replace the source with JXL and change its filename
 and URL (for example `reef.jpg.jxl`), while keeping ID, description, favorites and
-cover selections. Use the returned metadata after processing. Videos and photos
-below both size thresholds keep their original bytes.
+cover selections. Use the returned metadata after processing. Compatible H.264/AAC MP4 videos
+within 1080p bounds and photos below both size thresholds keep their original bytes.
+Other videos can change filename/URL to `.mp4`. The [video profile](video-processing.md)
+describes orientation, 360, audio and HDR behavior; no frontend conversion is needed.
+Pending items include `kind` for choosing a photo or video review UI. Edited videos
+with no recording date remain available for manual assignment.
 
 Photo thumbnails are JXL with a target 480-pixel shorter side; video thumbnails
 are JPEG up to 640x640. The returned URLs default to automatic negotiation:
@@ -293,6 +297,10 @@ edit form's value to a machine translation. `pending`, `error`, and `disabled`
 are fallback states, not empty content. Display country names from name_fr/name_en.
 Render user/provider prose as text, not trusted HTML; retain comment line breaks.
 Show OpenStreetMap attribution when presenting geocoded information.
+
+The [pending inbox guide](pending-media.md#apis-and-frontend-behavior) defines admin
+batch import, matching reasons, private previews, polling and capture metadata.
+Floating camera timestamps must not be interpreted in the browser timezone.
 
 ## Failure behavior
 

@@ -2,7 +2,7 @@
 
 [Specification index](../../SPECS.md) · [Frontend flows](frontend.md) · [OpenAPI contract](../openapi.yaml)
 
-This inventory is extracted from the schema-11 baseline OpenAPI document. Use the
+This inventory is extracted from the schema-12 baseline OpenAPI document. Use the
 linked contract for exact request/response schemas, required fields, nullable
 properties, error codes, and examples. Domain behavior is specified in the prose
 guides; the interactive Swagger UI is available at `/swagger/` (also `/docs`).
@@ -31,7 +31,7 @@ OPTIONS returns 204. Cookie auth and CSRF apply as described in
 | DELETE | `/api/v1/dives/{id}/media/{mediaID}` | Admin | Delete an attachment and its files | — | — | 204, 400, 404, 500, 503, 401, 403 |
 | GET | `/api/v1/dives/{id}/media/{mediaID}/thumbnail` | Public | Serve a photo or video thumbnail | — | `format`, `v` | 200, 206, 304, 400, 404, 412, 416, 500, 503 |
 | HEAD | `/api/v1/dives/{id}/media/{mediaID}/thumbnail` | Public | Read thumbnail headers without downloading it | — | `format`, `v` | 200, 206, 304, 400, 404, 412, 416, 500, 503 |
-| GET | `/assets/{id}/{filename}` | Public | Serve a retained photo or original video | — | `format` | 200, 206, 304, 400, 404, 409, 412, 416, 500, 503 |
+| GET | `/assets/{id}/{filename}` | Public | Serve a retained photo or normalized video | — | `format` | 200, 206, 304, 400, 404, 409, 412, 416, 500, 503 |
 | HEAD | `/assets/{id}/{filename}` | Public | Read original-file headers without downloading it | — | `format` | 200, 206, 304, 400, 404, 409, 412, 416, 500, 503 |
 | POST | `/api/v1/media/scan` | Admin | Reconcile media metadata and thumbnails with the assets directory | — | `force` | 200, 400, 500, 503, 401, 403 |
 | GET | `/api/v1/media/status` | Public | Read indexed media totals and configured upload limits | — | — | 200, 500, 503 |
@@ -63,7 +63,7 @@ OPTIONS returns 204. Cookie auth and CSRF apply as described in
 | DELETE | `/api/v1/trips/{tripID}/media/{mediaID}` | Admin | Delete an attachment and its files | — | — | 204, 400, 404, 500, 503, 401, 403 |
 | GET | `/api/v1/trips/{tripID}/media/{mediaID}/thumbnail` | Public | Serve a photo or video thumbnail | — | `format`, `v` | 200, 206, 304, 400, 404, 412, 416, 500, 503 |
 | HEAD | `/api/v1/trips/{tripID}/media/{mediaID}/thumbnail` | Public | Read thumbnail headers without downloading it | — | `format`, `v` | 200, 206, 304, 400, 404, 412, 416, 500, 503 |
-| GET | `/assets/trips/{tripID}/{filename}` | Public | Serve a retained photo or original video | — | `format` | 200, 206, 304, 400, 404, 409, 412, 416, 500, 503 |
+| GET | `/assets/trips/{tripID}/{filename}` | Public | Serve a retained photo or normalized video | — | `format` | 200, 206, 304, 400, 404, 409, 412, 416, 500, 503 |
 | HEAD | `/assets/trips/{tripID}/{filename}` | Public | Read original-file headers without downloading it | — | `format` | 200, 206, 304, 400, 404, 409, 412, 416, 500, 503 |
 | GET | `/api/v1/setup/status` | Bootstrap | Read persistent configuration state and runtime readiness | — | — | 200 |
 | GET | `/api/v1/setup/countries` | Bootstrap | List country choices before SQL initialization | — | — | 200 |
@@ -76,7 +76,16 @@ OPTIONS returns 204. Cookie auth and CSRF apply as described in
 | PATCH | `/api/v1/config` | Admin | Save SQL settings for the next restart | `application/json` / ConfigurationPatch | — | 200, 400, 503, 401, 403, 415 |
 | GET | `/healthz` | Bootstrap | Check process liveness | — | — | 200 |
 | GET | `/readyz` | Public readiness | Check whether normal configured APIs are ready | — | — | 200, 503 |
-
+| GET | `/api/v1/admin/media/pending` | Admin | List pending media and matching explanations | — | `limit`, `cursor`, `reason` | 200, 400, 401, 404, 409, 500, 503 |
+| GET | `/api/v1/admin/media/pending/status` | Admin | Read inbox counts and background scan status | — | — | 200, 400, 401, 404, 409, 500, 503 |
+| POST | `/api/v1/admin/media/pending/scan` | Admin | Queue a pending-directory scan | — | `force` | 202, 400, 401, 403, 404, 409, 500, 503 |
+| GET | `/api/v1/admin/media/pending/{pendingID}` | Admin | Read one pending media and candidate dives | — | — | 200, 400, 401, 404, 409, 500, 503 |
+| DELETE | `/api/v1/admin/media/pending/{pendingID}` | Admin | Delete a pending original and its previews | — | — | 204, 400, 401, 403, 404, 409, 500, 503 |
+| POST | `/api/v1/admin/media/pending/{pendingID}/assign` | Admin | Assign a pending media to a chosen dive | `application/json` / object | — | 200, 400, 401, 403, 404, 409, 500, 503 |
+| GET | `/api/v1/admin/media/pending/{pendingID}/thumbnail` | Admin | Preview a pending media | — | — | 200, 206, 304, 400, 401, 404, 409, 412, 416, 500, 503 |
+| HEAD | `/api/v1/admin/media/pending/{pendingID}/thumbnail` | Admin | Read pending image headers | — | — | 200, 206, 304, 400, 401, 404, 409, 412, 416, 500, 503 |
+| GET | `/api/v1/admin/media/pending/{pendingID}/file` | Admin | Read a pending original or JPEG representation | — | `format` | 200, 206, 304, 400, 401, 404, 409, 412, 416, 500, 503 |
+| HEAD | `/api/v1/admin/media/pending/{pendingID}/file` | Admin | Read pending image headers | — | `format` | 200, 206, 304, 400, 401, 404, 409, 412, 416, 500, 503 |
 
 ## Representation rules
 
@@ -90,7 +99,7 @@ OPTIONS returns 204. Cookie auth and CSRF apply as described in
 | --- | --- | --- |
 | Dives | `{ "date": "YYYY-MM-DD", "time": "...", "id": 123 }` | local_date DESC, start_time DESC, id DESC; lexicographically smaller tuple |
 | Samples | `{ "index": 42 }` | sample_index ASC; index strictly greater |
-| Owner media / favorites | `{ "filename": "...", "id": "..." }` | filename ASC, id ASC; tuple strictly greater |
+| Owner media / favorites / pending inbox | `{ "filename": "...", "id": "..." }` | filename ASC, id ASC; tuple strictly greater |
 | Trips | `{ "start_date": "YYYY-MM-DD", "id": "..." }` | start_date DESC, id DESC; tuple strictly smaller |
 
 Cursors reject invalid encoding, unknown fields, trailing JSON, and route-specific invalid values. Return at most limit items, fetch limit+1 to detect continuation. Matching file/identifier collation matters when porting.

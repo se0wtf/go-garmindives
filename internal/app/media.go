@@ -30,14 +30,15 @@ var (
 )
 
 type mediaLibrary struct {
-	store        *sqlStore
-	root         *os.Root
-	directory    string
-	maxUpload    int64
-	processor    mediaproc.Processor
-	logger       *charmLog.Logger
-	gate         chan struct{}
-	fallbackGate chan struct{}
+	store         *sqlStore
+	root          *os.Root
+	directory     string
+	maxUpload     int64
+	processor     mediaproc.Processor
+	logger        *charmLog.Logger
+	gate          chan struct{}
+	fallbackGate  chan struct{}
+	pendingSubdir string
 }
 
 type mediaScanResult struct {
@@ -227,7 +228,7 @@ func (l *mediaLibrary) Scan(ctx context.Context, force bool) (result mediaScanRe
 		return result, err
 	}
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), ".") || entry.Name() == "trips" {
+		if strings.HasPrefix(entry.Name(), ".") || entry.Name() == "trips" || entry.Name() == l.pendingSubdir {
 			continue
 		}
 		id, parseErr := strconv.ParseInt(entry.Name(), 10, 64)
@@ -354,14 +355,26 @@ func (l *mediaLibrary) indexOwnedFile(ctx context.Context, owner mediaOwner, nam
 		return m, "", errors.New("media must be a nonempty regular file")
 	}
 	_, photoProcessor := l.processor.(mediaproc.PhotoProcessor)
+	_, videoProcessor := l.processor.(mediaproc.VideoProcessor)
+	var seed *pendingImport
+	if fresh {
+		seed, err = l.store.pendingImportForFile(ctx, owner, name)
+		if err != nil {
+			return m, "", err
+		}
+	}
 	kind, _ := mediaType(name)
 	needsPhoto := kind == "photo" && photoProcessor && (m.photoState().Version != photoProfileVersion || m.needsHEIFRepair())
+	needsVideo := kind == "video" && videoProcessor && m.videoState().Version != videoProfileVersion
 	_, thumbErr := l.root.Stat(m.thumbnailPath())
-	if !fresh && name == m.Filename && !needsPhoto && !force && m.SizeBytes == info.Size() && m.ModifiedNS == info.ModTime().UnixNano() && m.ThumbnailStatus == "ready" && m.ThumbnailKey == m.thumbnailKey() && thumbErr == nil {
+	if !fresh && name == m.Filename && !needsPhoto && !needsVideo && !force && m.SizeBytes == info.Size() && m.ModifiedNS == info.ModTime().UnixNano() && m.ThumbnailStatus == "ready" && m.ThumbnailKey == m.thumbnailKey() && thumbErr == nil {
 		return m, "unchanged", nil
 	}
 	if kind == "photo" && photoProcessor {
-		return l.indexPhoto(ctx, owner, name, input, info, m, fresh)
+		return l.indexPhoto(ctx, owner, name, input, info, m, fresh, seed)
+	}
+	if kind == "video" && videoProcessor {
+		return l.indexVideo(ctx, owner, name, input, info, m, fresh, seed)
 	}
 	hash := sha256.New()
 	if _, err := io.Copy(hash, mediaContextReader{ctx: ctx, r: input}); err != nil {
@@ -370,10 +383,16 @@ func (l *mediaLibrary) indexOwnedFile(ctx context.Context, owner mediaOwner, nam
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if fresh {
 		m = mediaItem{ID: identity.NewID(), DiveID: owner.DiveID, TripID: owner.TripID, Filename: name, StereoLayout: "auto", Projection: "auto", CreatedAt: now}
+		if seed != nil {
+			m.ID, m.Capture = seed.ID, seed.Capture
+		}
 	}
 	m.Kind, m.ContentType = mediaType(name)
 	m.SizeBytes, m.ModifiedNS = info.Size(), info.ModTime().UnixNano()
 	m.SHA256, m.UpdatedAt = hex.EncodeToString(hash.Sum(nil)), now
+	if seed != nil && m.SHA256 != seed.SHA {
+		return old, "", errPendingChanged
+	}
 	m.Width, m.Height, m.DurationSeconds, m.DetectedStereoLayout = 0, 0, 0, ""
 	m.Probe, m.ThumbnailKey, m.ThumbnailStatus, m.ThumbnailError = []byte("{}"), "", "error", ""
 	probe, processErr := l.processor.Inspect(ctx, input)
@@ -389,6 +408,10 @@ func (l *mediaLibrary) indexOwnedFile(ctx context.Context, owner mediaOwner, nam
 		return m, "", ctx.Err()
 	}
 	if processErr != nil {
+		if seed != nil {
+			l.removeThumbnail(m)
+			return old, "", processErr
+		}
 		m.ThumbnailError = processErr.Error()
 	}
 	// Files copied in place may still be changing: keep their old index until a
@@ -437,6 +460,9 @@ func (l *mediaLibrary) makeThumbnail(ctx context.Context, input *os.File, m *med
 	err = l.processor.Thumbnail(ctx, input, output, mediaproc.ThumbnailOptions{
 		StereoLayout: layout, Projection: m.EffectiveProjection, ProjectionFormat: m.ProjectionFormat,
 	})
+	if err == nil {
+		err = output.Sync()
+	}
 	closeErr := output.Close()
 	if err != nil {
 		return err
@@ -445,6 +471,9 @@ func (l *mediaLibrary) makeThumbnail(ctx context.Context, input *os.File, m *med
 		return closeErr
 	}
 	if err := l.root.Rename(tmp, ".thumbnails/"+name+".jpg"); err != nil {
+		return err
+	}
+	if err := l.syncPhotoDirectory(".thumbnails"); err != nil {
 		return err
 	}
 	m.ThumbnailKey, m.ThumbnailStatus = name, "ready"
@@ -515,6 +544,14 @@ func (l *mediaLibrary) uploadOwned(ctx context.Context, owner mediaOwner, name s
 		return mediaItem{}, err
 	}
 	defer l.unlock()
+	if err := l.recoverPhotoJobs(ctx); err != nil {
+		return mediaItem{}, err
+	}
+	if reservation, err := l.store.pendingImportForFile(ctx, owner, name); err != nil {
+		return mediaItem{}, err
+	} else if reservation != nil {
+		return mediaItem{}, errMediaConflict
+	}
 	if existing, err := l.lookupPhotoAlias(ctx, owner, name); err == nil {
 		// Repair legacy HEIC conversions without discarding IDs or editorial data.
 		if existing.Filename == name || !existing.needsHEIFRepair() {
@@ -547,9 +584,8 @@ func (l *mediaLibrary) uploadOwned(ctx context.Context, owner mediaOwner, name s
 	}
 	m, _, err := l.indexOwnedFile(ctx, owner, name, true)
 	if err != nil {
-		if kind, _ := mediaType(name); kind != "photo" {
-			_ = l.root.Remove(target)
-		}
+		// Processing can have committed SQL before an interrupted response. Keep
+		// the source/journal for recovery, as with photo uploads.
 		return mediaItem{}, err
 	}
 	return m, nil

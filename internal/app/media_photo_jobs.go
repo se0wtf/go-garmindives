@@ -17,6 +17,7 @@ import (
 // A durable intent bridges filesystem publication and the SQL metadata commit.
 // Recovery either finishes source cleanup or restores the previous retained file.
 type photoJob struct {
+	Kind         string     `json:"kind,omitempty"`
 	ID           string     `json:"id"`
 	Owner        mediaOwner `json:"owner"`
 	Source       string     `json:"source"`
@@ -41,11 +42,18 @@ func validPhotoHash(value string) bool {
 }
 
 func (j photoJob) valid() bool {
+	kind := j.Kind
+	if kind == "" {
+		kind = "photo"
+	} // Pre-video journals remain recoverable.
+	if kind != "photo" && kind != "video" {
+		return false
+	}
 	ownerValid := j.Owner.DiveID > 0 && j.Owner.TripID == "" || j.Owner.DiveID == 0 && identity.ValidID(j.Owner.TripID)
 	ownedPhoto := func(path string) bool {
 		name := strings.TrimPrefix(path, j.Owner.directory()+"/")
-		kind, _ := mediaType(name)
-		return path == j.Owner.path(name) && validMediaFilename(name) && kind == "photo"
+		fileKind, _ := mediaType(name)
+		return path == j.Owner.path(name) && validMediaFilename(name) && fileKind == kind
 	}
 	backupValid := j.Backup == "" && j.BackupSHA == "" || strings.HasPrefix(j.Backup, ".uploads/photo-backup-") && identity.ValidID(strings.TrimPrefix(j.Backup, ".uploads/photo-backup-")) && validPhotoHash(j.BackupSHA)
 	obsoleteValid := j.Obsolete == "" && j.ObsoleteSHA == "" || ownedPhoto(j.Obsolete) && j.Obsolete != j.Target && validPhotoHash(j.ObsoleteSHA)
@@ -92,6 +100,9 @@ func (l *mediaLibrary) savePhotoJob(j photoJob) error {
 
 func (l *mediaLibrary) publishPhoto(ctx context.Context, owner mediaOwner, source, sourceSHA, stage string, m, old mediaItem) (*photoJob, error) {
 	j := photoJob{ID: m.ID, Owner: owner, Source: owner.path(source), SourceSHA: sourceSHA, Target: owner.path(m.Filename), TargetSHA: m.SHA256, Thumbnail: m.ThumbnailKey, OldThumbnail: old.ThumbnailKey}
+	if m.Kind == "video" {
+		j.Kind = "video"
+	}
 	if _, err := l.root.Lstat(j.path()); err == nil {
 		return nil, errors.New("photo recovery is pending; rescan before replacing this photo")
 	} else if !errors.Is(err, fs.ErrNotExist) {
@@ -178,7 +189,7 @@ func (l *mediaLibrary) finishPhotoJob(ctx context.Context, j photoJob) error {
 	if err != nil || actual != j.TargetSHA {
 		return errors.New("retained photo changed; original cleanup postponed")
 	}
-	if thumb, err := l.root.Stat(".thumbnails/" + j.Thumbnail + ".jxl"); err != nil || thumb.Size() <= 0 {
+	if thumb, err := l.root.Stat(j.thumbnailPath()); err != nil || thumb.Size() <= 0 {
 		return errors.New("photo thumbnail missing; original cleanup postponed")
 	}
 	if j.Source != j.Target {
@@ -241,12 +252,20 @@ func (l *mediaLibrary) rollbackPhotoJob(ctx context.Context, j photoJob) error {
 		}
 	}
 	if j.Thumbnail != j.OldThumbnail {
-		_ = l.root.Remove(".thumbnails/" + j.Thumbnail + ".jxl")
+		_ = l.root.Remove(j.thumbnailPath())
 	}
 	if err := l.syncPhotoDirectory(j.Owner.directory()); err != nil {
 		return err
 	}
 	return l.removePhotoJob(j)
+}
+
+func (j photoJob) thumbnailPath() string {
+	ext := ".jxl"
+	if j.Kind == "video" {
+		ext = ".jpg"
+	}
+	return ".thumbnails/" + j.Thumbnail + ext
 }
 
 func (l *mediaLibrary) removePhotoJob(j photoJob) error {

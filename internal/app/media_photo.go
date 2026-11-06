@@ -90,11 +90,15 @@ func (l *mediaLibrary) lookupPhotoAlias(ctx context.Context, owner mediaOwner, n
 		return m, err
 	}
 	target := convertedPhotoFilename(name)
+	video := false
+	if kind, _ := mediaType(name); kind == "video" {
+		target, video = convertedVideoFilename(name), true
+	}
 	if target == name {
 		return m, err
 	}
 	converted, lookupErr := l.store.ownedMediaByFilename(ctx, owner, target)
-	if lookupErr == nil && converted.photoState().SourceFilename == name {
+	if lookupErr == nil && (converted.photoState().SourceFilename == name || video && converted.videoState().SourceFilename == name) {
 		return converted, nil
 	}
 	if lookupErr != nil && !errors.Is(lookupErr, errMediaNotFound) {
@@ -164,12 +168,15 @@ func (l *mediaLibrary) makePhotoThumbnail(ctx context.Context, input *os.File, m
 	return nil
 }
 
-func (l *mediaLibrary) indexPhoto(ctx context.Context, owner mediaOwner, name string, input *os.File, info fs.FileInfo, old mediaItem, fresh bool) (mediaItem, string, error) {
+func (l *mediaLibrary) indexPhoto(ctx context.Context, owner mediaOwner, name string, input *os.File, info fs.FileInfo, old mediaItem, fresh bool, seed *pendingImport) (mediaItem, string, error) {
 	sourceSHA, err := hashPhoto(ctx, input)
 	if err != nil {
 		return old, "", err
 	}
 	heifInput := mediaproc.IsHEIF(input)
+	if seed != nil && sourceSHA != seed.SHA {
+		return old, "", errPendingChanged
+	}
 	if old.Filename == name && old.SHA256 == sourceSHA && old.needsHEIFRepair() && !heifInput {
 		// Existing JXL bytes cannot recover tiles discarded by the old decoder.
 		m := old
@@ -202,6 +209,9 @@ func (l *mediaLibrary) indexPhoto(ctx context.Context, owner mediaOwner, name st
 	m := old
 	if fresh {
 		m = mediaItem{ID: identity.NewID(), DiveID: owner.DiveID, TripID: owner.TripID, StereoLayout: "auto", Projection: "auto", CreatedAt: nowString()}
+		if seed != nil {
+			m.ID, m.Capture = seed.ID, seed.Capture
+		}
 	}
 	m.Filename, m.Kind, m.ContentType = name, "photo", ""
 	_, m.ContentType = mediaType(name)
@@ -232,6 +242,9 @@ func (l *mediaLibrary) indexPhoto(ctx context.Context, owner mediaOwner, name st
 		}
 		if ctx.Err() != nil {
 			return old, "", ctx.Err()
+		}
+		if seed != nil {
+			return old, "", cause
 		}
 		current, statErr := l.root.Stat(owner.path(name))
 		if statErr != nil || !os.SameFile(info, current) || current.Size() != info.Size() || !current.ModTime().Equal(info.ModTime()) {
