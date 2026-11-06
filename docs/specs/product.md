@@ -242,3 +242,11 @@ falling back to French per field. Cached results can be ready without a provider
 key; empty source is ready without a request. Source edits select another cache
 revision immediately, so old English must never accompany new French. A missing
 translation must not block browsing or editing.
+
+## Refreshing Garmin website edits
+
+An administrator can refresh one stored dive or all stored dives without
+re-downloading FIT/profile data. A background job exposes progress and individual
+results; successful activity changes are visible immediately, even if another
+activity fails. Local galleries, favorites, covers, countries and manual trip
+choices survive. [Resync behavior](resync.md) defines job states and frontend flows.

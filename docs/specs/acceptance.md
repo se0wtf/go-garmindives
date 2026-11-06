@@ -33,7 +33,14 @@ edge cases. Run against SQLite and PostgreSQL for any backend claiming both.
 | A19 | Local CLI password recovery | No plaintext password argument/file; confirmation; all sessions revoked |
 | A20 | JSON/YAML output selection or memory SQLite config | Reject unsupported persistence; no Garmin call before initialized SQL validation |
 
-Reference evidence: [auth tests](../../internal/app/auth_test.go), [configuration tests](../../internal/app/config_test.go).
+The [settings matrix](settings.md) is exhaustive: each operator YAML leaf has a
+flag, ENV name and built-in default. Verify every source independently, flags >
+ENV > YAML > defaults, valid flags overriding invalid ENV, canonical DB ENV aliases,
+last-flag wins, private YAML credentials, help/API redaction, and preservation of
+all flag overrides across setup/database PATCH. ENV/flag secrets must not be saved.
+
+Reference evidence: [settings tests](../../internal/config/settings_test.go),
+[runtime wiring tests](../../internal/app/config_runtime_test.go), [auth tests](../../internal/app/auth_test.go), [configuration tests](../../internal/app/config_test.go).
 
 ## Sync, notes, FIT, and measurements
 
@@ -283,7 +290,27 @@ Evidence: [capture reader](../../internal/media/capture_test.go),
 | V05 | Pending capture date / Resolve render date only | Confident capture matches; render-only metadata stays pending; private previews/manual assignment work |
 | V06 | 360 panorama conversion and forced scan | Complete panorama/aspect preserved; SQL projection/stereo hints survive |
 | V07 | Trip upload/scan or filename collision | Same profile, stable editorial metadata; no unrelated destination overwrite |
+| V08 | Full-range HEVC/H.264, MOV remux, previously rejected yuvj420p output | Accept 8-bit 4:2:0 aliases without changing levels; no repeat encoding; failed retained originals retry with stable media ID |
 
 Evidence: [encoder tests](../../internal/media/video_test.go),
 [upload/scan tests](../../internal/app/media_video_test.go),
 [pending videos](../../internal/app/pending_video_test.go).
+
+## Administrator metadata resync
+
+| ID | Fixture / action | Expected |
+| --- | --- | --- |
+| R01 | Admin single refresh, cached FIT present or absent | Edited metadata/parsed notes replaced; no FIT/profile requests or data writes; local media/cover retained |
+| R02 | Bulk snapshot then add another stored dive | Only snapshotted IDs requested, sequentially; new IDs await later sync |
+| R03 | One Garmin 404/invalid response | Failed item retained unchanged; others continue; partial parent status |
+| R04 | Expired credentials or persistent 429 | Safe failure code; stop remaining requests and mark skipped |
+| R05 | Slow Garmin request while reading public APIs | No held SQL transaction; data reads available; status shows current ID |
+| R06 | Concurrent starts or browser disconnect | One accepted active job; 409 Location for others; disconnect does not cancel work |
+| R07 | Cancellation or restart/shutdown | Preserve committed items, skip unfinished; durable canceled/interrupted state; no silent resume |
+| R08 | SQL item-result write fails after metadata update | Roll back metadata and result together; source unchanged |
+| R09 | Anonymous GET/HEAD/start/cancel or cross-origin write | 401/403; setup gate returns 503 before configuration |
+| R10 | History/results pagination, filters, status reads | Correct cursor pages; safe result codes; no extra Garmin requests |
+| R11 | Personal API with synthetic token and real SDK, SQLite/PostgreSQL | One metadata GET per target; shared pacing, zero FIT/history/profile requests |
+
+Evidence: [worker tests](../../internal/app/resync_test.go),
+[API/PostgreSQL tests](../../internal/app/resync_http_test.go).

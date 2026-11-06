@@ -25,9 +25,9 @@ import (
 )
 
 func TestGarminPersonalDiveIntegration(t *testing.T) {
-	key := strings.TrimSpace(os.Getenv("GARMIN_PERSONAL_API_KEY"))
+	key := strings.TrimSpace(os.Getenv("DIVELOG_GARMIN_PERSONAL_API_KEY"))
 	if key == "" {
-		t.Skip("set GARMIN_PERSONAL_API_KEY to run the live Personal API integration test")
+		t.Skip("set DIVELOG_GARMIN_PERSONAL_API_KEY to run the live Personal API integration test")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -104,13 +104,13 @@ func (c selectedDiveClient) Activities(context.Context, garmin.ListOptions) ([]g
 }
 
 func TestGarminDiveIntegration(t *testing.T) {
-	email, password := os.Getenv("GARMIN_EMAIL"), os.Getenv("GARMIN_PASSWORD")
+	email, password := os.Getenv("DIVELOG_GARMIN_EMAIL"), os.Getenv("DIVELOG_GARMIN_PASSWORD")
 	if email == "" || password == "" {
-		t.Skip("set GARMIN_EMAIL and GARMIN_PASSWORD to run the live integration test")
+		t.Skip("set DIVELOG_GARMIN_EMAIL and DIVELOG_GARMIN_PASSWORD to run the live integration test")
 	}
 	directory := t.TempDir()
 	tokenPath := filepath.Join(directory, "tokens", "tokens.json")
-	mfa := func(context.Context) (string, error) { return os.Getenv("GARMIN_MFA_CODE"), nil }
+	mfa := func(context.Context) (string, error) { return os.Getenv("DIVELOG_GARMIN_MFA_CODE"), nil }
 	httpClient, err := garminhttp.FromEnvironment(testLogger(t))
 	if err != nil {
 		t.Fatal(err)
@@ -349,4 +349,5 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		exercisePhotoSQLConversion(t, store)
 	})
 	t.Run("pending photo imports", func(t *testing.T) { exercisePendingPostgres(t, store) })
+	t.Run("admin metadata resync", func(t *testing.T) { exerciseResyncPostgres(t, store) })
 }

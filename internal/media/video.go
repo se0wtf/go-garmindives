@@ -48,7 +48,11 @@ func videoHDR(probe Probe) bool {
 
 func videoCopy(probe Probe) bool {
 	w, h := VideoSize(probe)
-	return probe.VideoCodec == "h264" && probe.PixelFormat == "yuv420p" &&
+	// FFprobe may name full-range 8-bit 4:2:0 yuvj420p, even when the
+	// encoder was given yuv420p. Both describe compatible H.264 samples;
+	// retain the range flag rather than forcing a lossy range conversion.
+	compatiblePixels := probe.PixelFormat == "yuv420p" || probe.PixelFormat == "yuvj420p"
+	return probe.VideoCodec == "h264" && compatiblePixels &&
 		w == probe.Width && h == probe.Height && probe.Rotation == 0 &&
 		(probe.SampleAspect == 0 || probe.SampleAspect == 1) && !probe.Interlaced && !videoHDR(probe)
 }

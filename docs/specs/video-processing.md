@@ -11,7 +11,7 @@ FFprobe. It does not contact Garmin and requires no additional service.
 | Property | Rule |
 | --- | --- |
 | Container | MP4 (existing compatible MP4/M4V may remain unchanged) |
-| Video codec | H.264, 8-bit `yuv420p` |
+| Video codec | H.264, 8-bit 4:2:0 (`yuv420p` or full-range `yuvj420p`) |
 | Maximum landscape dimensions | Fit inside 1920 × 1080 |
 | Maximum portrait dimensions | Fit inside 1080 × 1920 |
 | Aspect ratio | Preserve displayed aspect ratio; no crop, stretch, or upscaling; even pixel dimensions |
@@ -23,11 +23,15 @@ FFprobe. It does not contact Garmin and requires no additional service.
 | HDR PQ/HLG | Tone-map to SDR BT.709 using zscale + Hable tonemapping before 8-bit H.264 encoding |
 | Converted output | Streamable fragmented MP4, initialization metadata before media fragments; byte-range/HEAD seeking supported |
 
-A video already in MP4/M4V with one H.264/yuv420p stream, AAC audio (or no audio),
+A video already in MP4/M4V with one H.264 8-bit 4:2:0 stream, AAC audio (or no audio),
 square pixels, no rotation/interlacing/HDR, and dimensions within the limits keeps
 its original bytes. No lossy video encoding is done merely to change a container
 or audio codec: copy compatible H.264 and normalize only what is needed. An
 unchanged or forced rescan does not recompress a compatible retained master.
+FFprobe may report full-range samples as `yuvj420p`, including after an encode
+requested as `yuv420p`. Both representations are accepted; preserve the range
+flag instead of forcing a range conversion merely to change the format name.
+Other chroma layouts and 10-bit pixel formats still require normalization.
 
 Keep an MP4/M4V filename and capitalization. For other containers append `.mp4`
 to the full original name, e.g. `Shark.mov.mp4`. Long UTF-8 names use the same

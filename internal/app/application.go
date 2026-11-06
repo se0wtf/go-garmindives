@@ -45,9 +45,13 @@ type applicationRuntime struct {
 	auth         *adminAuth
 	handler      http.Handler
 	pending      *pendingService
+	resync       *resyncService
 }
 
 func (r *applicationRuntime) Close() {
+	if r.resync != nil {
+		r.resync.Close()
+	}
 	if r.pending != nil {
 		r.pending.Close()
 	}
@@ -129,11 +133,11 @@ func (a *application) activate(c appconfig.Loaded) (*applicationRuntime, string)
 	if err := appconfig.ValidateDatabase(c.Effective.Database); err != nil {
 		return nil, "invalid_configuration"
 	}
-	deeplConfig, err := deeplclient.FromEnvironment()
+	deeplConfig, err := deeplclient.ParseSettings(c.Effective.Translation)
 	if err != nil {
 		return nil, "invalid_configuration"
 	}
-	geoConfig, err := geolookup.FromEnvironment()
+	geoConfig, err := geolookup.ParseSettings(c.Effective.Geocoding)
 	if err != nil {
 		return nil, "invalid_configuration"
 	}
@@ -200,12 +204,19 @@ func (a *application) activate(c appconfig.Loaded) (*applicationRuntime, string)
 	}
 	geocoder := newCountryService(store, geoConfig, lookup, a.logger)
 	store.geocoder = geocoder
+	resync := newResyncServiceConfigured(store, a.logger, c)
+	if err := resync.Recover(a.ctx); err != nil {
+		resync.Close()
+		return nil, "database_unavailable"
+	}
+	store.resync = resync
 	auth := newAdminAuth(a, store, c.Effective)
-	r := &applicationRuntime{store: store, media: media, translations: translations, geocoder: geocoder, auth: auth, pending: pending}
+	r := &applicationRuntime{store: store, media: media, translations: translations, geocoder: geocoder, auth: auth, pending: pending, resync: resync}
 	r.handler = auth.Handler(newAPIHandler(store, a.logger))
 	translations.Start(a.ctx)
 	geocoder.Start(a.ctx)
 	pending.Start(a.ctx)
+	resync.Start(a.ctx)
 	ok = true
 	if a.logger != nil {
 		a.logger.Info("configured service ready", "output_type", config.Type, "output", config.LogDestination())
@@ -315,27 +326,9 @@ func (a *application) withDatabasePatch(c appconfig.Loaded, p databasePatch) (ap
 		}
 		file.Database.URI = value
 	}
-	resolved, err := appconfig.Resolve(c.Path, file)
+	resolved, err := c.WithFile(file)
 	if err != nil {
 		return c, err
-	}
-	for key, source := range c.Overrides {
-		if !strings.HasPrefix(source, "flag:") {
-			continue
-		}
-		resolved.Overrides[key] = source
-		switch key {
-		case "database.type":
-			resolved.Effective.Database.Type = c.Effective.Database.Type
-		case "database.uri":
-			resolved.Effective.Database.URI = c.Effective.Database.URI
-		case "http.listen":
-			resolved.Effective.HTTP.Listen = c.Effective.HTTP.Listen
-		case "media.directory":
-			resolved.Effective.Media.Directory = c.Effective.Media.Directory
-		case "media.max_upload_bytes":
-			resolved.Effective.Media.MaxUploadBytes = c.Effective.Media.MaxUploadBytes
-		}
 	}
 	if err := appconfig.ValidateDatabase(resolved.Effective.Database); err != nil {
 		return c, err

@@ -35,11 +35,11 @@ func TestYAMLSettingsEnvironmentPrecedenceAndRelativePaths(t *testing.T) {
 	if err != nil || !strings.Contains(c.DatabaseOutput().Endpoint, "/relative.db?mode=rwc") {
 		t.Fatal("relative file URI did not retain its query or configuration directory")
 	}
-	t.Setenv("GARMIN_OUTPUT_DSN", "legacy.db")
-	t.Setenv("GARMIN_DB_URI", "override.db")
-	t.Setenv("GARMIN_COOKIE_SECURE", "false")
+	t.Setenv("DIVELOG_OUTPUT_DSN", "legacy.db")
+	t.Setenv("DIVELOG_DB_URI", "override.db")
+	t.Setenv("DIVELOG_COOKIE_SECURE", "false")
 	c, err = appconfig.Load([]string{"-config", path})
-	if err != nil || c.Effective.Database.URI != "override.db" || c.File.Database.URI != "file:relative.db?mode=rwc" || c.Effective.HTTP.CookieSecure || c.Overrides["database.uri"] != "GARMIN_DB_URI" {
+	if err != nil || c.Effective.Database.URI != "override.db" || c.File.Database.URI != "file:relative.db?mode=rwc" || c.Effective.HTTP.CookieSecure || c.Overrides["database.uri"] != "DIVELOG_DB_URI" {
 		t.Fatal("ENV precedence or base YAML preservation failed")
 	}
 	for _, contents := range []string{"version: [", "version: 999", "unknown_setting: true", "version: 1\n---\nversion: 1\n", "initialized: true\n"} {
@@ -66,14 +66,14 @@ func TestPendingConfigurationPathsAndEnvironment(t *testing.T) {
 	if err != nil || resolved.PendingDirectory() != filepath.Join(dir, "assets", "pending") || resolved.Effective.Media.PendingScanInterval != "60s" {
 		t.Fatalf("pending defaults: %+v %v", resolved, err)
 	}
-	t.Setenv("GARMIN_PENDING_DIR", filepath.Join(dir, "inbox"))
-	t.Setenv("GARMIN_PENDING_SCAN_INTERVAL", "90s")
+	t.Setenv("DIVELOG_PENDING_DIR", filepath.Join(dir, "inbox"))
+	t.Setenv("DIVELOG_PENDING_SCAN_INTERVAL", "90s")
 	resolved, err = appconfig.Resolve(path, file)
-	if err != nil || resolved.PendingDirectory() != filepath.Join(dir, "inbox") || resolved.Overrides["media.pending_scan_interval"] != "GARMIN_PENDING_SCAN_INTERVAL" || resolved.File.Media.PendingScanInterval != "60s" {
+	if err != nil || resolved.PendingDirectory() != filepath.Join(dir, "inbox") || resolved.Overrides["media.pending_scan_interval"] != "DIVELOG_PENDING_SCAN_INTERVAL" || resolved.File.Media.PendingScanInterval != "60s" {
 		t.Fatal("pending ENV precedence failed")
 	}
 	for _, value := range []string{"0s", "-1s", "48h", "invalid"} {
-		t.Setenv("GARMIN_PENDING_SCAN_INTERVAL", value)
+		t.Setenv("DIVELOG_PENDING_SCAN_INTERVAL", value)
 		if _, err := appconfig.Resolve(path, file); err == nil {
 			t.Fatalf("invalid interval accepted: %s", value)
 		}
@@ -115,8 +115,8 @@ func TestSetupUsesEnvironmentWithoutPersistingItsSecrets(t *testing.T) {
 	file := appconfig.Default()
 	file.Media.Directory = filepath.Join(dir, "assets")
 	const uri = "postgres://admin:synthetic-env-secret@example.invalid:5432/dives"
-	t.Setenv("GARMIN_DB_TYPE", "postgres")
-	t.Setenv("GARMIN_DB_URI", uri)
+	t.Setenv("DIVELOG_DB_TYPE", "postgres")
+	t.Setenv("DIVELOG_DB_URI", uri)
 	c, err := appconfig.Resolve(filepath.Join(dir, "config.yaml"), file)
 	if err != nil {
 		t.Fatal(err)

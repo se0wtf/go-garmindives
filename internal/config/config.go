@@ -8,11 +8,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
+	charmLog "github.com/charmbracelet/log"
 	"github.com/jackc/pgx/v5"
+	geolookup "github.com/se0wtf/go-garmindives/internal/geocoding"
+	translation "github.com/se0wtf/go-garmindives/internal/translation"
 	"go.yaml.in/yaml/v3"
 
 	envutil "github.com/se0wtf/go-garmindives/internal/env"
@@ -42,14 +44,32 @@ type Media struct {
 	PendingDirectory    string `yaml:"pending_directory" json:"pending_directory"`
 	PendingScanInterval string `yaml:"pending_scan_interval" json:"pending_scan_interval"`
 }
+type Garmin struct {
+	PersonalAPIKey  string `yaml:"personal_api_key,omitempty" json:"-"`
+	Email           string `yaml:"email,omitempty" json:"-"`
+	Password        string `yaml:"password,omitempty" json:"-"`
+	MFACode         string `yaml:"mfa_code,omitempty" json:"-"`
+	TokenFile       string `yaml:"token_file" json:"token_file"`
+	ResyncTokenFile string `yaml:"resync_token_file" json:"resync_token_file"`
+	RequestInterval string `yaml:"request_interval" json:"request_interval"`
+}
+type Logging struct {
+	Level string `yaml:"level" json:"level"`
+}
+type Translation = translation.Settings
+type Geocoding = geolookup.Settings
 type Config struct {
-	Version     int      `yaml:"version" json:"version"`
-	Initialized bool     `yaml:"initialized" json:"initialized"`
-	InstanceID  string   `yaml:"instance_id,omitempty" json:"-"`
-	Database    Database `yaml:"database" json:"database"`
-	HTTP        HTTP     `yaml:"http" json:"http"`
-	Auth        Auth     `yaml:"auth" json:"auth"`
-	Media       Media    `yaml:"media" json:"media"`
+	Version     int                  `yaml:"version" json:"version"`
+	Initialized bool                 `yaml:"initialized" json:"initialized"`
+	InstanceID  string               `yaml:"instance_id,omitempty" json:"-"`
+	Database    Database             `yaml:"database" json:"database"`
+	HTTP        HTTP                 `yaml:"http" json:"http"`
+	Auth        Auth                 `yaml:"auth" json:"auth"`
+	Media       Media                `yaml:"media" json:"media"`
+	Garmin      Garmin               `yaml:"garmin" json:"garmin"`
+	Translation translation.Settings `yaml:"translation" json:"translation"`
+	Geocoding   geolookup.Settings   `yaml:"geocoding" json:"geocoding"`
+	Logging     Logging              `yaml:"logging" json:"logging"`
 }
 type Loaded struct {
 	Path            string
@@ -58,30 +78,17 @@ type Loaded struct {
 }
 
 func Default() Config {
-	return Config{Version: configVersion, Database: Database{Type: SQLite, URI: "dives.db"}, HTTP: HTTP{Listen: "127.0.0.1:8080", CookieSecure: true}, Auth: Auth{SessionLifetime: "24h", IdleTimeout: "2h"}, Media: Media{Directory: "assets", MaxUploadBytes: DefaultMediaMaxUpload, PendingDirectory: "pending", PendingScanInterval: "60s"}}
+	return Config{Version: configVersion, Database: Database{Type: SQLite, URI: "dives.db"}, HTTP: HTTP{Listen: "127.0.0.1:8080", CookieSecure: true}, Auth: Auth{SessionLifetime: "24h", IdleTimeout: "2h"}, Media: Media{Directory: "assets", MaxUploadBytes: DefaultMediaMaxUpload, PendingDirectory: "pending", PendingScanInterval: "60s"}, Garmin: Garmin{RequestInterval: "2s"}, Translation: translation.DefaultSettings(), Geocoding: geolookup.DefaultSettings(), Logging: Logging{Level: "info"}}
 }
 
-func configPathFromArgs(args []string) (string, error) {
-	path := envutil.Default("GARMIN_CONFIG", "config.yaml")
-	for i := 0; i < len(args); i++ {
-		arg := strings.TrimLeft(args[i], "-")
-		if arg == "config" && strings.HasPrefix(args[i], "-") {
-			i++
-			if i == len(args) {
-				return "", errors.New("-config requires a path")
-			}
-			path = args[i]
-		} else if strings.HasPrefix(arg, "config=") && strings.HasPrefix(args[i], "-") {
-			path = strings.TrimPrefix(arg, "config=")
-		}
-	}
-	if strings.TrimSpace(path) == "" {
-		return "", errors.New("configuration path must not be empty")
-	}
-	return filepath.Abs(path)
-}
 func Load(args []string) (Loaded, error) {
-	path, err := configPathFromArgs(args)
+	overrides, path, err := settingOverrides(args)
+	if path == "" {
+		path = envutil.Default("DIVELOG_CONFIG", "config.yaml")
+	}
+	if err == nil {
+		path, err = filepath.Abs(path)
+	}
 	if err != nil {
 		return Loaded{}, err
 	}
@@ -101,48 +108,41 @@ func Load(args []string) (Loaded, error) {
 			return Loaded{}, errors.New("configuration must contain one YAML document")
 		}
 	}
-	return Resolve(path, c)
+	return resolve(path, c, overrides)
 }
-func Resolve(path string, file Config) (Loaded, error) {
+func Resolve(path string, file Config) (Loaded, error) { return resolve(path, file, nil) }
+func ResolveArgs(path string, file Config, args []string) (Loaded, error) {
+	overrides, _, err := settingOverrides(args)
+	if err != nil {
+		return Loaded{}, err
+	}
+	return resolve(path, file, overrides)
+}
+func resolve(path string, file Config, flags map[string]flagOverride) (Loaded, error) {
 	result := Loaded{Path: path, File: file, Effective: file, Overrides: map[string]string{}}
-	c := &result.Effective
-	for _, field := range []struct {
-		key    string
-		names  []string
-		target *string
-	}{
-		{"database.type", []string{"GARMIN_OUTPUT_TYPE", "GARMIN_DB_TYPE"}, &c.Database.Type}, {"database.uri", []string{"GARMIN_OUTPUT_DSN", "GARMIN_DB_URI"}, &c.Database.URI},
-		{"http.listen", []string{"GARMIN_API_ADDR"}, &c.HTTP.Listen}, {"http.public_url", []string{"GARMIN_PUBLIC_URL"}, &c.HTTP.PublicURL},
-		{"auth.session_lifetime", []string{"GARMIN_SESSION_LIFETIME"}, &c.Auth.SessionLifetime}, {"auth.idle_timeout", []string{"GARMIN_SESSION_IDLE_TIMEOUT"}, &c.Auth.IdleTimeout},
-		{"media.directory", []string{"GARMIN_ASSETS_DIR"}, &c.Media.Directory},
-		{"media.pending_directory", []string{"GARMIN_PENDING_DIR"}, &c.Media.PendingDirectory},
-		{"media.pending_scan_interval", []string{"GARMIN_PENDING_SCAN_INTERVAL"}, &c.Media.PendingScanInterval},
-	} {
-		for _, name := range field.names {
+	for _, s := range settings {
+		if _, overridden := flags[s.Key]; overridden {
+			continue
+		}
+		for _, name := range s.Env {
 			if value, ok := os.LookupEnv(name); ok {
-				*field.target = strings.TrimSpace(value)
-				result.Overrides[field.key] = name
+				if err := setSetting(&result.Effective, s, value); err != nil {
+					return result, err
+				}
+				result.Overrides[s.Key] = name
 			}
 		}
 	}
-	if value, ok := os.LookupEnv("GARMIN_COOKIE_SECURE"); ok {
-		parsed, err := strconv.ParseBool(value)
-		if err != nil {
-			return result, errors.New("GARMIN_COOKIE_SECURE must be true or false")
+	for key, override := range flags {
+		if err := setSetting(&result.Effective, override.setting, override.value); err != nil {
+			return result, err
 		}
-		c.HTTP.CookieSecure = parsed
-		result.Overrides["http.cookie_secure"] = "GARMIN_COOKIE_SECURE"
+		result.Overrides[key] = "flag:-" + override.name
 	}
-	if value, ok := os.LookupEnv("GARMIN_MEDIA_MAX_UPLOAD_BYTES"); ok {
-		parsed, err := strconv.ParseInt(value, 10, 64)
-		if err != nil {
-			return result, errors.New("invalid GARMIN_MEDIA_MAX_UPLOAD_BYTES")
-		}
-		c.Media.MaxUploadBytes = parsed
-		result.Overrides["media.max_upload_bytes"] = "GARMIN_MEDIA_MAX_UPLOAD_BYTES"
-	}
-	c.Database.Type = strings.ToLower(strings.TrimSpace(c.Database.Type))
-	if err := Validate(*c); err != nil {
+	result.Effective.Database.Type = strings.ToLower(strings.TrimSpace(result.Effective.Database.Type))
+	result.Effective.Translation.TargetLang = strings.ToUpper(strings.TrimSpace(result.Effective.Translation.TargetLang))
+	result.Effective.Logging.Level = strings.ToLower(strings.TrimSpace(result.Effective.Logging.Level))
+	if err := Validate(result.Effective); err != nil {
 		return result, err
 	}
 	return result, nil
@@ -223,6 +223,22 @@ func Validate(c Config) error {
 	if err != nil || interval < time.Second || interval > 24*time.Hour {
 		return errors.New("media.pending_scan_interval must be between 1s and 24h")
 	}
+	interval, err = time.ParseDuration(c.Garmin.RequestInterval)
+	if err != nil || interval <= 0 {
+		return errors.New("garmin.request_interval must be a positive duration")
+	}
+	if strings.ContainsAny(c.Garmin.PersonalAPIKey, "\r\n") {
+		return errors.New("garmin.personal_api_key must not contain line breaks")
+	}
+	if _, err := translation.ParseSettings(c.Translation); err != nil {
+		return err
+	}
+	if _, err := geolookup.ParseSettings(c.Geocoding); err != nil {
+		return err
+	}
+	if _, err := charmLog.ParseLevel(c.Logging.Level); err != nil {
+		return errors.New("logging.level is invalid")
+	}
 	return nil
 }
 func (c Loaded) DatabaseOutput() Output {
@@ -259,6 +275,28 @@ func (c Loaded) PendingDirectory() string {
 		path = filepath.Join(c.AssetsDirectory(), path)
 	}
 	return filepath.Clean(path)
+}
+
+func (c Loaded) TokenFile(resync bool, configDirectory string) string {
+	value := c.Effective.Garmin.TokenFile
+	key := "garmin.token_file"
+	if resync {
+		value = c.Effective.Garmin.ResyncTokenFile
+		key = "garmin.resync_token_file"
+	}
+	if value != "" {
+		if filepath.IsAbs(value) || strings.HasPrefix(c.Overrides[key], "flag:") {
+			return value
+		}
+		return filepath.Join(filepath.Dir(c.Path), value)
+	}
+	name := "tokens.json"
+	if resync {
+		name = "resync-personal-tokens.json"
+	} else if c.Effective.Garmin.PersonalAPIKey != "" {
+		name = "personal-tokens.json"
+	}
+	return filepath.Join(configDirectory, "go-garmindives", name)
 }
 
 func Write(path string, c Config) error {

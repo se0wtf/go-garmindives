@@ -39,8 +39,8 @@ func englishTestTexts(texts []string) []string {
 
 func clearDeepLEnvironment(t *testing.T) {
 	t.Helper()
-	for _, name := range []string{"DEEPL_API_KEY", "DEEPL_API_URL", "DEEPL_TARGET_LANG", "DEEPL_REQUEST_INTERVAL", "DEEPL_GLOSSARY_ID"} {
-		t.Setenv(name, "")
+	for _, name := range []string{"DIVELOG_DEEPL_API_KEY", "DIVELOG_DEEPL_API_URL", "DIVELOG_DEEPL_TARGET_LANG", "DIVELOG_DEEPL_REQUEST_INTERVAL", "DIVELOG_DEEPL_GLOSSARY_ID"} {
+		unsetTestEnvironment(t, name)
 	}
 }
 
@@ -80,23 +80,23 @@ func finishTranslations(t *testing.T, service *translationService) {
 
 func TestDeepLConfiguration(t *testing.T) {
 	clearDeepLEnvironment(t)
-	t.Setenv("GARMIN_GEOCODING_ENABLED", "false")
-	t.Setenv("DEEPL_API_KEY", "synthetic:fx")
+	t.Setenv("DIVELOG_GEOCODING_ENABLED", "false")
+	t.Setenv("DIVELOG_DEEPL_API_KEY", "synthetic:fx")
 	config, err := deeplclient.FromEnvironment()
 	if err != nil || config.Endpoint != "https://api-free.deepl.com/v2/translate" || config.Locale != "EN-GB" || config.Interval != 2*time.Second {
 		t.Fatalf("default DeepL configuration: %v", err)
 	}
-	t.Setenv("DEEPL_API_KEY", "synthetic-pro")
-	t.Setenv("DEEPL_TARGET_LANG", "en-us")
-	t.Setenv("DEEPL_REQUEST_INTERVAL", "5s")
+	t.Setenv("DIVELOG_DEEPL_API_KEY", "synthetic-pro")
+	t.Setenv("DIVELOG_DEEPL_TARGET_LANG", "en-us")
+	t.Setenv("DIVELOG_DEEPL_REQUEST_INTERVAL", "5s")
 	config, err = deeplclient.FromEnvironment()
 	if err != nil || config.Endpoint != "https://api.deepl.com/v2/translate" || config.Locale != "EN-US" || config.Interval != 5*time.Second {
 		t.Fatalf("explicit DeepL configuration: %v", err)
 	}
 	for _, tc := range []struct{ name, value string }{
-		{"DEEPL_REQUEST_INTERVAL", "0s"}, {"DEEPL_REQUEST_INTERVAL", "oops"}, {"DEEPL_TARGET_LANG", "DE"},
-		{"DEEPL_API_URL", "http://example.com"}, {"DEEPL_API_URL", "https://user:secret@example.com"},
-		{"DEEPL_API_URL", "https://example.com/?key=secret"}, {"DEEPL_API_URL", "https://example.com/path"},
+		{"DIVELOG_DEEPL_REQUEST_INTERVAL", "0s"}, {"DIVELOG_DEEPL_REQUEST_INTERVAL", "oops"}, {"DIVELOG_DEEPL_TARGET_LANG", "DE"},
+		{"DIVELOG_DEEPL_API_URL", "http://example.com"}, {"DIVELOG_DEEPL_API_URL", "https://user:secret@example.com"},
+		{"DIVELOG_DEEPL_API_URL", "https://example.com/?key=secret"}, {"DIVELOG_DEEPL_API_URL", "https://example.com/path"},
 	} {
 		t.Run(tc.name+tc.value, func(t *testing.T) {
 			t.Setenv(tc.name, tc.value)
@@ -492,7 +492,7 @@ func TestTranslationWorkerCancellationDoesNotBlockAPIReads(t *testing.T) {
 
 func TestRunServeStartsTranslationBackfillAndResumesFailedWork(t *testing.T) {
 	clearDeepLEnvironment(t)
-	t.Setenv("GARMIN_GEOCODING_ENABLED", "false")
+	t.Setenv("DIVELOG_GEOCODING_ENABLED", "false")
 	store, _ := openTestSQLStore(t)
 	addFrenchTestDive(t, store, 100, "Commentaire: Beau récif")
 	seed := testTranslationService(t, store, nil)
@@ -512,9 +512,9 @@ func TestRunServeStartsTranslationBackfillAndResumesFailedWork(t *testing.T) {
 		_, _ = io.WriteString(w, `{"translations":[{"text":"Beautiful reef"}]}`)
 	}))
 	defer provider.Close()
-	t.Setenv("DEEPL_API_KEY", key)
-	t.Setenv("DEEPL_API_URL", provider.URL)
-	t.Setenv("DEEPL_REQUEST_INTERVAL", "1ms")
+	t.Setenv("DIVELOG_DEEPL_API_KEY", key)
+	t.Setenv("DIVELOG_DEEPL_API_URL", provider.URL)
+	t.Setenv("DIVELOG_DEEPL_REQUEST_INTERVAL", "1ms")
 	var logs bytes.Buffer
 	logger, err := NewAppLogger(&logs, "debug")
 	if err != nil {

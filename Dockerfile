@@ -34,8 +34,8 @@ RUN apk add --no-cache libheif-tools libheif-libde265 exiftool
 COPY --from=build /out/go-garmindives /usr/local/bin/go-garmindives
 
 ENV HOME=/data \
-    GARMIN_CONFIG=/data/config.yaml \
-    GARMIN_API_ADDR=0.0.0.0:8080 \
+    DIVELOG_CONFIG=/data/config.yaml \
+    DIVELOG_API_ADDR=0.0.0.0:8080 \
     XDG_CONFIG_HOME=/tokens
 
 WORKDIR /data

@@ -35,6 +35,19 @@ func TestVideoDisplaySizeAndConformance(t *testing.T) {
 	if !VideoConforms(base, "clip.MP4") {
 		t.Fatal("compatible MP4 needs conversion")
 	}
+	fullRange := base
+	fullRange.PixelFormat = "yuvj420p"
+	fullRange.Width, fullRange.Height, fullRange.Duration = 1080, 1920, 12.221159
+	if !VideoConforms(fullRange, "clip.mp4") {
+		t.Fatal("compatible full-range H.264 was rejected")
+	}
+	for _, pixels := range []string{"yuvj422p", "yuvj444p", "yuv420p10le", "yuv422p", "yuv444p"} {
+		incompatible := base
+		incompatible.PixelFormat = pixels
+		if VideoConforms(incompatible, "clip.mp4") {
+			t.Fatalf("incompatible pixel format accepted: %s", pixels)
+		}
+	}
 	for _, mutate := range []func(*Probe){func(p *Probe) { p.VideoCodec = "hevc" }, func(p *Probe) { p.PixelFormat = "yuv420p10le" }, func(p *Probe) { p.Rotation = 90 }, func(p *Probe) { p.Width = 3840; p.Height = 2160 }, func(p *Probe) { p.AudioCodecs = []string{"pcm_s16le"} }, func(p *Probe) { p.VideoStreams = 2 }, func(p *Probe) { p.ColorTransfer = "smpte2084" }, func(p *Probe) { p.Interlaced = true }} {
 		p := base
 		mutate(&p)
@@ -110,6 +123,60 @@ func TestVideoFFmpegNormalization(t *testing.T) {
 			moov, mdat := bytes.Index(body, []byte("moov")), bytes.Index(body, []byte("mdat"))
 			if moov < 0 || mdat < 0 || moov > mdat {
 				t.Fatal("MP4 is not faststart")
+			}
+		})
+	}
+}
+
+func TestVideoFFmpegFullRange(t *testing.T) {
+	for _, test := range []struct {
+		name, size, codec string
+		width, height     int
+	}{
+		{"HEVC", "216x384", "libx265", 216, 384},
+		{"downscale H264", "2160x3840", "libx264", 1080, 1920},
+		{"remux H264", "216x384", "libx264", 216, 384},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			args := []string{"-f", "lavfi", "-i", "color=c=black:s=" + test.size + ":r=5", "-t", "0.4", "-vf", "geq=lum='if(lt(X,W/3),0,if(lt(X,2*W/3),128,255))':cb=128:cr=128,setparams=range=full", "-c:v", test.codec, "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-color_range", "pc"}
+			if test.codec == "libx265" {
+				args = append(args, "-x265-params", "pools=none:frame-threads=1:log-level=error:range=full")
+			}
+			path := videoFixture(t, "full-range.mov", args...)
+			input, err := os.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer input.Close()
+			output, err := os.CreateTemp(t.TempDir(), "normalized-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer output.Close()
+			processor := NewProcessor()
+			source, err := processor.Inspect(context.Background(), input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := processor.Video(context.Background(), input, output, source)
+			if err != nil || result.Width != test.width || result.Height != test.height {
+				t.Fatalf("full-range conversion: %+v %v", result, err)
+			}
+			// Check decoded luma, not just metadata: accepting full range must not
+			// expand/compress black, mid-gray or white while retaining its flag.
+			cmd := exec.Command(processor.FFmpeg, "-hide_banner", "-loglevel", "error", "-i", output.Name(), "-map", "0:V:0", "-vf", "extractplanes=y", "-frames:v", "1", "-pix_fmt", "gray", "-f", "rawvideo", "pipe:1")
+			pixels, err := cmd.Output()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(pixels) != result.Width*result.Height {
+				t.Fatal("invalid decoded luma frame")
+			}
+			for index, want := range []int{0, 128, 255} {
+				got := int(pixels[(result.Height/2)*result.Width+result.Width*(2*index+1)/6])
+				if got < want-3 || got > want+3 {
+					t.Fatalf("full-range luma changed at bar %d: got %d, want %d", index, got, want)
+				}
 			}
 		})
 	}

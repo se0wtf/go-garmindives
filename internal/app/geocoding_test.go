@@ -19,22 +19,22 @@ type countryLookupFunc func(context.Context, float64, float64) (string, error)
 func (f countryLookupFunc) Lookup(ctx context.Context, lat, lon float64) (string, error) {
 	return f(ctx, lat, lon)
 }
-func disableGeocodingForTest(t *testing.T) { t.Helper(); t.Setenv("GARMIN_GEOCODING_ENABLED", "false") }
+func disableGeocodingForTest(t *testing.T) { t.Helper(); t.Setenv("DIVELOG_GEOCODING_ENABLED", "false") }
 
 func TestGeocodingConfigurationAndProtocol(t *testing.T) {
-	t.Setenv("GARMIN_GEOCODING_ENABLED", "true")
-	t.Setenv("GARMIN_GEOCODING_URL", "")
-	t.Setenv("GARMIN_GEOCODING_INTERVAL", "")
-	t.Setenv("GARMIN_GEOCODING_USER_AGENT", "")
+	t.Setenv("DIVELOG_GEOCODING_ENABLED", "true")
+	t.Setenv("DIVELOG_GEOCODING_URL", "")
+	t.Setenv("DIVELOG_GEOCODING_INTERVAL", "")
+	t.Setenv("DIVELOG_GEOCODING_USER_AGENT", "")
 	c, err := geolookup.FromEnvironment()
 	if err != nil || !c.Enabled || c.Interval != 15*time.Second || c.Endpoint != "https://nominatim.openstreetmap.org/reverse" {
 		t.Fatalf("geocoding defaults: %+v %v", c, err)
 	}
-	t.Setenv("GARMIN_GEOCODING_INTERVAL", "1s")
+	t.Setenv("DIVELOG_GEOCODING_INTERVAL", "1s")
 	if _, err := geolookup.FromEnvironment(); err == nil {
 		t.Fatal("public recurring geocoder allowed excessive pacing")
 	}
-	t.Setenv("GARMIN_GEOCODING_INTERVAL", "")
+	t.Setenv("DIVELOG_GEOCODING_INTERVAL", "")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" || r.URL.Path != "/reverse" || r.URL.Query().Get("lat") != "26.300000" || r.URL.Query().Get("lon") != "34.860000" || r.URL.Query().Get("zoom") != "5" || r.URL.Query().Get("accept-language") != "en" || !strings.Contains(r.Header.Get("User-Agent"), "go-garmindives") || r.Header.Get("Authorization") != "" {
 			t.Errorf("unexpected country request: %s", r.URL.String())
@@ -42,8 +42,8 @@ func TestGeocodingConfigurationAndProtocol(t *testing.T) {
 		_, _ = w.Write([]byte(`{"address":{"country_code":"eg","country":"Egypt"},"display_name":"Egypt"}`))
 	}))
 	defer server.Close()
-	t.Setenv("GARMIN_GEOCODING_URL", server.URL)
-	t.Setenv("GARMIN_GEOCODING_INTERVAL", "1ms")
+	t.Setenv("DIVELOG_GEOCODING_URL", server.URL)
+	t.Setenv("DIVELOG_GEOCODING_INTERVAL", "1ms")
 	c, err = geolookup.FromEnvironment()
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +53,7 @@ func TestGeocodingConfigurationAndProtocol(t *testing.T) {
 		t.Fatalf("offshore country result=%s err=%v", code, err)
 	}
 	for _, origin := range []string{"http://example.com", "https://user:secret@example.com", "https://example.com/path", "https://example.com/?key=secret"} {
-		t.Setenv("GARMIN_GEOCODING_URL", origin)
+		t.Setenv("DIVELOG_GEOCODING_URL", origin)
 		if _, err := geolookup.FromEnvironment(); err == nil || strings.Contains(err.Error(), "secret") {
 			t.Fatal("invalid/credential-bearing geocoder URL accepted or logged")
 		}

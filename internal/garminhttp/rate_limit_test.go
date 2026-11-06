@@ -77,7 +77,7 @@ func TestGarminRateConfiguration(t *testing.T) {
 		value string
 		want  time.Duration
 	}{{"", 2 * time.Second}, {"  ", 2 * time.Second}, {"5s", 5 * time.Second}, {" 750ms ", 750 * time.Millisecond}} {
-		t.Setenv("GARMIN_REQUEST_INTERVAL", tc.value)
+		t.Setenv("DIVELOG_GARMIN_REQUEST_INTERVAL", tc.value)
 		client, err := FromEnvironment(testLogger(t))
 		if err != nil {
 			t.Fatal(err)
@@ -89,7 +89,7 @@ func TestGarminRateConfiguration(t *testing.T) {
 		client.CloseIdleConnections()
 	}
 	for _, invalid := range []string{"0", "0s", "-2s", "invalid"} {
-		t.Setenv("GARMIN_REQUEST_INTERVAL", invalid)
+		t.Setenv("DIVELOG_GARMIN_REQUEST_INTERVAL", invalid)
 		if _, err := FromEnvironment(testLogger(t)); err == nil {
 			t.Fatalf("accepted invalid request interval %q", invalid)
 		}

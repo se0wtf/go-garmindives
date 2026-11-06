@@ -68,7 +68,7 @@ These are functional responsibilities, not a prescribed visual design.
 | Trip detail | Editorial content, cruise/operator/price, cover, linked dives, own gallery, favorite dive gallery |
 | Media viewer/editor | Original URL, thumbnail, caption/description, resolved projection; favorite for dive media; cover selection on owner |
 | Residence settings | List/create/edit/delete inclusive home-country periods |
-| Application settings | Authenticated current/pending DB settings, redacted URI, ENV overrides, restart-required state |
+| Application settings | Authenticated effective nonsecret settings for every group, current/pending DB display, ENV/flag overrides, restart-required state |
 | Maintenance | Media status/rescan, country and translation progress/retry, trip rebuild |
 | Country correction (admin) | Paginated missing-country dives, lookup reason/GPS, manual country selection from the full catalog |
 
@@ -324,3 +324,13 @@ GETs can be repeated. Do not blindly retry successful-or-unknown POST uploads,
 trip creation, or residence creation after a connection loss: inspect the owner
 collection first. The API has no generic idempotency-key support or edit ETag
 preconditions. Conditional ETags apply to file reads, not concurrent form edits.
+
+## Administrator Garmin refresh
+
+The [resync guide](resync.md#progress-and-frontend-flow) specifies the admin-only
+single/all-dive actions, polling UI, job history, item failures and cancellation.
+Start with resync/status, disable start while busy or unavailable, and adopt the
+active job from a 409 Location. Start returns 202 immediately; never treat it as
+completed work. Poll the job every 2 seconds and stop on its terminal status.
+Refresh affected dive/trip/filter caches after successful changes. FIT/profile
+data is unchanged; country lookup and translation may continue independently.

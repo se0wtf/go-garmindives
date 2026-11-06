@@ -117,7 +117,7 @@ func (s *apiServer) countryStatus(w http.ResponseWriter, r *http.Request) {
 }
 func (s *apiServer) retryCountries(w http.ResponseWriter, r *http.Request) {
 	if s.store.geocoder == nil || s.store.geocoder.client == nil {
-		httpx.WriteAPIError(w, 503, "geocoding_disabled", "enable GARMIN_GEOCODING_ENABLED and restart serve")
+		httpx.WriteAPIError(w, 503, "geocoding_disabled", "enable DIVELOG_GEOCODING_ENABLED and restart serve")
 		return
 	}
 	_, err := s.store.db.ExecContext(r.Context(), `UPDATE country_lookup_cache SET status='pending',attempts=0,retry_at=0,last_error='' WHERE status IN ('error','not_found')`)

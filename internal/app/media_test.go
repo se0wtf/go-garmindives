@@ -597,7 +597,7 @@ func TestMediaFFmpegPhotoVideoAndStereoThumbnails(t *testing.T) {
 
 func TestRunServeScansAssetsBeforeListening(t *testing.T) {
 	clearDeepLEnvironment(t)
-	t.Setenv("GARMIN_GEOCODING_ENABLED", "false")
+	t.Setenv("DIVELOG_GEOCODING_ENABLED", "false")
 	store, _ := openTestSQLStore(t)
 	if err := store.SaveDives(context.Background(), []DiveRecord{testSQLDive(t, 42)}); err != nil {
 		t.Fatal(err)

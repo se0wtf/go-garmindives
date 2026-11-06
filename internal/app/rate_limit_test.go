@@ -16,12 +16,12 @@ func TestSyncRateConfiguration(t *testing.T) {
 	store, _ := openTestSQLStore(t)
 	configuredArgs := configuredServeArgs(t, store, nil)
 	for _, invalid := range []string{"0", "0s", "-2s", "invalid"} {
-		t.Setenv("GARMIN_REQUEST_INTERVAL", invalid)
-		if err := Run(context.Background(), append([]string{"sync"}, configuredArgs...), nil, io.Discard, testLogger(t)); err == nil || !strings.Contains(err.Error(), "GARMIN_REQUEST_INTERVAL") {
+		t.Setenv("DIVELOG_GARMIN_REQUEST_INTERVAL", invalid)
+		if err := Run(context.Background(), append([]string{"sync"}, configuredArgs...), nil, io.Discard, testLogger(t)); err == nil || !strings.Contains(err.Error(), "garmin.request_interval") {
 			t.Fatalf("sync did not validate request interval before starting: %v", err)
 		}
 	}
-	if err := Run(context.Background(), []string{"serve", "-help"}, nil, io.Discard, testLogger(t)); err != nil {
+	if err := Run(context.Background(), []string{"serve", "-garmin-request-interval=2s", "-help"}, nil, io.Discard, testLogger(t)); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -83,7 +83,7 @@ for dependency specifications a reimplementation must supply.
 One shared transport per sync invocation serializes callers through response
 headers, then schedules the next request at least 2 seconds later by default.
 The first request may run immediately; no accumulated burst allowance exists.
-`GARMIN_REQUEST_INTERVAL` must be positive. Limiting is per process, not SQL-wide;
+`DIVELOG_GARMIN_REQUEST_INTERVAL` must be positive. Limiting is per process, not SQL-wide;
 deployment must prevent overlapping sync invocations.
 
 Each network attempt has a 30-second timeout, including reading its body. Pacing
@@ -516,3 +516,11 @@ HEAD/ranges/ETag/Last-Modified semantics. Reject original reads with
 `409 media_changed` when indexed size/mtime no longer match; require rescan rather
 than serving bytes under stale validators. Preserve normal conditional HTTP
 statuses (304/412/416). No directory browsing.
+
+## Administrator data resync
+
+[The resync algorithm](resync.md#persistence-lifecycle-and-backend-reimplementation)
+defines target snapshots, one active job, metadata-only requests, per-item atomic
+saves, safe errors and restart/cancellation behavior. It uses the serving process
+and its existing paced Garmin transport; network requests never hold a SQL
+transaction or use the FIT downloader.

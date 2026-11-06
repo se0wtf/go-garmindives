@@ -124,7 +124,7 @@ func (s *apiServer) translationStatus(w http.ResponseWriter, r *http.Request) {
 func (s *apiServer) retryTranslations(w http.ResponseWriter, r *http.Request) {
 	service := s.store.translationService()
 	if service.client == nil {
-		httpx.WriteAPIError(w, http.StatusServiceUnavailable, "translation_disabled", "configure DEEPL_API_KEY and restart serve to enable translation")
+		httpx.WriteAPIError(w, http.StatusServiceUnavailable, "translation_disabled", "configure DIVELOG_DEEPL_API_KEY and restart serve to enable translation")
 		return
 	}
 	if err := service.Retry(r.Context()); err != nil {

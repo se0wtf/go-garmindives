@@ -63,8 +63,8 @@ func (p *fakePrompter) Secret(context.Context, string) (string, error) {
 }
 
 func TestReadCredentialsFromEnvironment(t *testing.T) {
-	t.Setenv("GARMIN_EMAIL", "runner@example.com")
-	t.Setenv("GARMIN_PASSWORD", "secret")
+	t.Setenv("DIVELOG_GARMIN_EMAIL", "runner@example.com")
+	t.Setenv("DIVELOG_GARMIN_PASSWORD", "secret")
 	prompt := &fakePrompter{}
 	got, err := readCredentials(context.Background(), prompt)
 	if err != nil || got.Email != "runner@example.com" || got.Password != "secret" {
@@ -76,8 +76,8 @@ func TestReadCredentialsFromEnvironment(t *testing.T) {
 }
 
 func TestReadCredentialsPromptsForMissingValues(t *testing.T) {
-	t.Setenv("GARMIN_EMAIL", "")
-	t.Setenv("GARMIN_PASSWORD", "")
+	t.Setenv("DIVELOG_GARMIN_EMAIL", "")
+	t.Setenv("DIVELOG_GARMIN_PASSWORD", "")
 	prompt := &fakePrompter{lines: []string{"runner@example.com"}, secret: "secret"}
 	got, err := readCredentials(context.Background(), prompt)
 	if err != nil || got.Email != "runner@example.com" || got.Password != "secret" {
@@ -89,8 +89,8 @@ func TestReadCredentialsPromptsForMissingValues(t *testing.T) {
 }
 
 func TestReadCredentialsErrors(t *testing.T) {
-	t.Setenv("GARMIN_EMAIL", "")
-	t.Setenv("GARMIN_PASSWORD", "")
+	t.Setenv("DIVELOG_GARMIN_EMAIL", "")
+	t.Setenv("DIVELOG_GARMIN_PASSWORD", "")
 	wantErr := errors.New("prompt failed")
 	if _, err := readCredentials(context.Background(), &fakePrompter{err: wantErr}); !errors.Is(err, wantErr) {
 		t.Fatalf("error = %v", err)
@@ -126,8 +126,8 @@ func TestAwaitPromptCancellation(t *testing.T) {
 }
 
 func TestReadCredentialsCancellation(t *testing.T) {
-	t.Setenv("GARMIN_EMAIL", "")
-	t.Setenv("GARMIN_PASSWORD", "")
+	t.Setenv("DIVELOG_GARMIN_EMAIL", "")
+	t.Setenv("DIVELOG_GARMIN_PASSWORD", "")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	prompt := &contextPrompter{}
@@ -144,7 +144,7 @@ func TestLoginDoesNotUseLegacyCredentialsForPersonalCache(t *testing.T) {
 	}
 	prompt := &fakePrompter{}
 	_, err := login(context.Background(), path, prompt)
-	if err == nil || !strings.Contains(err.Error(), "GARMIN_PERSONAL_API_KEY") || prompt.lineCalls != 0 || prompt.secretCalls != 0 {
+	if err == nil || !strings.Contains(err.Error(), "DIVELOG_GARMIN_PERSONAL_API_KEY") || prompt.lineCalls != 0 || prompt.secretCalls != 0 {
 		t.Fatalf("Personal API cache should require a key without prompting: %v", err)
 	}
 }

@@ -84,8 +84,8 @@ func TestRunHelp(t *testing.T) {
 		}
 		for _, expected := range []string{
 			"downloads every Garmin Connect dive",
-			"GARMIN_PERSONAL_API_KEY", "GARMIN_REQUEST_INTERVAL",
-			"GARMIN_EMAIL", "GARMIN_PASSWORD", "GARMIN_MFA_CODE", "GARMIN_OUTPUT_TYPE", "GARMIN_OUTPUT_DSN", "GARMIN_API_ADDR", "LOG_LEVEL",
+			"DIVELOG_GARMIN_PERSONAL_API_KEY", "DIVELOG_GARMIN_REQUEST_INTERVAL",
+			"DIVELOG_GARMIN_EMAIL", "DIVELOG_GARMIN_PASSWORD", "DIVELOG_GARMIN_MFA_CODE", "DIVELOG_OUTPUT_TYPE", "DIVELOG_OUTPUT_DSN", "DIVELOG_API_ADDR", "DIVELOG_LOG_LEVEL",
 			"-output", "-output-type", "-output-dsn", "-token-file",
 		} {
 			if !strings.Contains(output.String(), expected) {
@@ -96,9 +96,9 @@ func TestRunHelp(t *testing.T) {
 }
 
 func TestRunUsesSQLConfigurationFromEnvironment(t *testing.T) {
-	t.Setenv("GARMIN_OUTPUT_TYPE", appconfig.Postgres)
+	t.Setenv("DIVELOG_OUTPUT_TYPE", appconfig.Postgres)
 	const dsn = "postgres://secret:password@example.invalid:5432/dives?application_name=private-option"
-	t.Setenv("GARMIN_OUTPUT_DSN", dsn)
+	t.Setenv("DIVELOG_OUTPUT_DSN", dsn)
 	var config appconfig.Output
 	destination := &fakeDestination{archive: newSyncState(), existed: true}
 	dependencies := appDependencies{
@@ -132,7 +132,7 @@ func TestRunUsesSQLConfigurationFromEnvironment(t *testing.T) {
 }
 
 func TestRunWithSQLiteOutputIsIncremental(t *testing.T) {
-	t.Setenv("GARMIN_OUTPUT_TYPE", "")
+	unsetTestEnvironment(t, "DIVELOG_OUTPUT_TYPE")
 	fixture := testSQLDive(t, 42)
 	activityDetails, err := json.Marshal(fixture.ActivityDetails)
 	if err != nil {
@@ -183,8 +183,8 @@ func TestRunWithSQLiteOutputIsIncremental(t *testing.T) {
 }
 
 func TestRunDefaultsToSQLite(t *testing.T) {
-	t.Setenv("GARMIN_OUTPUT_TYPE", "")
-	t.Setenv("GARMIN_OUTPUT_DSN", "")
+	unsetTestEnvironment(t, "DIVELOG_OUTPUT_TYPE")
+	unsetTestEnvironment(t, "DIVELOG_OUTPUT_DSN")
 	client := &fakeDiveClient{
 		activities:         []garmin.Activity{{ID: 9, ActivityType: garmin.ActivityType{Key: "single_gas_diving"}}},
 		activityDetails:    map[int64]json.RawMessage{9: json.RawMessage(`{"activityId":9}`)},

@@ -17,6 +17,7 @@ internal/
     application.go              setup gate, activation, readiness, worker lifecycle
     http*.go                    HTTP handlers, authentication, and middleware
     sqlstore*.go                SQL connection, migrations, queries, persistence
+    resync*.go, sqlstore_resync*.go  admin metadata jobs, source refresh and persistence
     sync*.go, destination.go    import selection and transactional destination
     trips.go, dive_patch.go     trip grouping and local dive metadata
     media*.go, cover.go         filesystem library, ownership and cover selection
@@ -26,7 +27,7 @@ internal/
     country_worker.go           persistent geocoding work and travel reconciliation
     translation_worker.go       persistent translation work and cache assembly
     *_test.go, testdata/         domain/API/storage integration tests and fixtures
-  config/                       YAML/ENV resolution, SQL destinations and validation
+  config/                       YAML/ENV/flag/default registry, SQL destinations and validation
   country/                      bilingual catalog and normalized country resolution
   fit/                          FIT containers, decoder and lossless document types
   garminhttp/                    Garmin request pacing/retries and focused tests

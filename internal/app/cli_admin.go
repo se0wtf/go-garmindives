@@ -40,6 +40,7 @@ func resetAdminPasswordWithPrompt(ctx context.Context, args []string, secret fun
 	flags := flag.NewFlagSet("admin reset-password", flag.ContinueOnError)
 	flags.SetOutput(output)
 	flags.String("config", c.Path, "application YAML configuration")
+	appconfig.RegisterFlags(flags, &c.Effective)
 	if err := flags.Parse(args); errors.Is(err, flag.ErrHelp) {
 		return nil
 	} else if err != nil {
@@ -48,6 +49,8 @@ func resetAdminPasswordWithPrompt(ctx context.Context, args []string, secret fun
 	if flags.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
 	}
+	level, _ := charmLog.ParseLevel(c.Effective.Logging.Level)
+	logger.SetLevel(level)
 	if !c.File.Initialized {
 		return appconfig.ErrNotConfigured
 	}

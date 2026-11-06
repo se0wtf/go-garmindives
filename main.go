@@ -13,7 +13,7 @@ import (
 )
 
 func main() {
-	logger, err := app.NewAppLogger(os.Stderr, os.Getenv("LOG_LEVEL"))
+	logger, err := app.NewAppLogger(os.Stderr, "info")
 	if err != nil {
 		charmLog.Error("invalid logger configuration", "err", err)
 		os.Exit(1)

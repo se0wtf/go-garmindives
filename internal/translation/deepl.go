@@ -27,35 +27,57 @@ type Config struct {
 	Interval                           time.Duration
 }
 
+type Settings struct {
+	APIKey     string `yaml:"api_key,omitempty" json:"-"`
+	URL        string `yaml:"url" json:"url"`
+	TargetLang string `yaml:"target_lang" json:"target_lang"`
+	GlossaryID string `yaml:"glossary_id" json:"glossary_id"`
+	Interval   string `yaml:"interval" json:"interval"`
+}
+
+func DefaultSettings() Settings { return Settings{TargetLang: "EN-GB", Interval: "2s"} }
+
 func FromEnvironment() (Config, error) {
+	s := DefaultSettings()
+	s.APIKey = strings.TrimSpace(os.Getenv("DIVELOG_DEEPL_API_KEY"))
+	s.URL = envutil.Default("DIVELOG_DEEPL_API_URL", "")
+	s.TargetLang = envutil.Default("DIVELOG_DEEPL_TARGET_LANG", s.TargetLang)
+	s.GlossaryID = strings.TrimSpace(os.Getenv("DIVELOG_DEEPL_GLOSSARY_ID"))
+	s.Interval = envutil.Default("DIVELOG_DEEPL_REQUEST_INTERVAL", s.Interval)
+	return ParseSettings(s)
+}
+
+func ParseSettings(s Settings) (Config, error) {
 	config := Config{
-		APIKey:   strings.TrimSpace(os.Getenv("DEEPL_API_KEY")),
-		Locale:   strings.ToUpper(envutil.Default("DEEPL_TARGET_LANG", "EN-GB")),
-		Glossary: strings.TrimSpace(os.Getenv("DEEPL_GLOSSARY_ID")),
+		APIKey:   strings.TrimSpace(s.APIKey),
+		Locale:   strings.ToUpper(s.TargetLang),
+		Glossary: strings.TrimSpace(s.GlossaryID),
 	}
 	if config.Locale != "EN-GB" && config.Locale != "EN-US" {
-		return config, errors.New("DEEPL_TARGET_LANG must be EN-GB or EN-US")
+		return config, errors.New("translation.target_lang must be EN-GB or EN-US")
 	}
-	interval, err := time.ParseDuration(envutil.Default("DEEPL_REQUEST_INTERVAL", "2s"))
+	interval, err := time.ParseDuration(s.Interval)
 	if err != nil || interval <= 0 {
-		return config, errors.New("DEEPL_REQUEST_INTERVAL must be a positive duration")
+		return config, errors.New("translation.interval must be a positive duration")
 	}
 	config.Interval = interval
 	base := "https://api.deepl.com"
 	if strings.HasSuffix(config.APIKey, ":fx") {
 		base = "https://api-free.deepl.com"
 	}
-	base = envutil.Default("DEEPL_API_URL", base)
+	if s.URL != "" {
+		base = s.URL
+	}
 	parsed, err := url.Parse(base)
 	if err != nil || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
-		return config, errors.New("DEEPL_API_URL must be an HTTPS origin without credentials, query, or path")
+		return config, errors.New("translation.url must be an HTTPS origin without credentials, query, or path")
 	}
 	loopback := strings.EqualFold(parsed.Hostname(), "localhost")
 	if ip := net.ParseIP(parsed.Hostname()); ip != nil {
 		loopback = ip.IsLoopback()
 	}
 	if parsed.Scheme != "https" && !(parsed.Scheme == "http" && loopback) {
-		return config, errors.New("DEEPL_API_URL requires HTTPS; HTTP is allowed only for a loopback test/proxy")
+		return config, errors.New("translation.url requires HTTPS; HTTP is allowed only for a loopback test/proxy")
 	}
 	config.Endpoint = strings.TrimRight(base, "/") + "/v2/translate"
 	return config, nil

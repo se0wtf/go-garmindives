@@ -233,13 +233,13 @@ func TestAPIListenAddressSafety(t *testing.T) {
 
 func TestRunServeConfigurationAndHelp(t *testing.T) {
 	clearDeepLEnvironment(t)
-	t.Setenv("GARMIN_GEOCODING_ENABLED", "false")
-	t.Setenv("GARMIN_ASSETS_DIR", t.TempDir())
+	t.Setenv("DIVELOG_GEOCODING_ENABLED", "false")
+	t.Setenv("DIVELOG_ASSETS_DIR", t.TempDir())
 	var help bytes.Buffer
 	if err := runServe(context.Background(), []string{"-h"}, &help, testLogger(t)); err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"GARMIN_OUTPUT_TYPE", "GARMIN_OUTPUT_DSN", "GARMIN_API_ADDR", "-listen"} {
+	for _, expected := range []string{"DIVELOG_OUTPUT_TYPE", "DIVELOG_OUTPUT_DSN", "DIVELOG_API_ADDR", "-listen"} {
 		if !strings.Contains(help.String(), expected) {
 			t.Errorf("serve help does not contain %q", expected)
 		}
@@ -269,11 +269,11 @@ func TestRunServeConfigurationAndHelp(t *testing.T) {
 
 func TestRunServeUsesEnvironment(t *testing.T) {
 	clearDeepLEnvironment(t)
-	t.Setenv("GARMIN_GEOCODING_ENABLED", "false")
-	t.Setenv("GARMIN_ASSETS_DIR", t.TempDir())
-	t.Setenv("GARMIN_OUTPUT_TYPE", appconfig.SQLite)
-	t.Setenv("GARMIN_OUTPUT_DSN", "environment.db")
-	t.Setenv("GARMIN_API_ADDR", "localhost:9191")
+	t.Setenv("DIVELOG_GEOCODING_ENABLED", "false")
+	t.Setenv("DIVELOG_ASSETS_DIR", t.TempDir())
+	t.Setenv("DIVELOG_OUTPUT_TYPE", appconfig.SQLite)
+	t.Setenv("DIVELOG_OUTPUT_DSN", "environment.db")
+	t.Setenv("DIVELOG_API_ADDR", "localhost:9191")
 	store, _ := openTestSQLStore(t)
 	var gotKind, gotDSN, gotAddress string
 	err := runServeWithDependencies(context.Background(), configuredServeArgs(t, store, nil), io.Discard, testLogger(t),

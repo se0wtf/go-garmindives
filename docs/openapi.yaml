@@ -5,7 +5,7 @@ info:
   description: 'Read synchronized Garmin dives and manage their photos and videos locally.
 
     Reads are public after initial setup. Every mutation and configuration endpoint requires an administrator session.
-    Garmin credentials are only needed by the separate sync command.
+    Garmin credentials are needed by the sync command and optional administrator activity resync jobs on serve.
 
 
     Dive IDs are Garmin activity IDs (SQL dives.id), distinct from Garmin Dive
@@ -37,6 +37,8 @@ servers:
     description: The server hosting this specification
 security: []
 tags:
+  - name: Activity resync
+    description: Admin-only background Garmin metadata refresh, progress and history; no FIT requests
   - name: Health
     description: Local database health
   - name: Dives
@@ -400,7 +402,7 @@ paths:
         HEIC uses libheif for full grid assembly and orientation, never a single HEVC
         tile. Ambiguous multi-image HEIF containers retain the source with an error.
         Unsupported codecs, missing tools, and animated sources requiring conversion
-        keep the source with thumbnail_status=error. Videos normalize to H.264/yuv420p MP4,
+        keep the source with thumbnail_status=error. Videos normalize to H.264 8-bit 4:2:0 MP4 (yuv420p or full-range yuvj420p),
         maximum 1920x1080 landscape or 1080x1920 portrait, preserving aspect ratio without
         upscaling. Compatible MP4/M4V files remain unchanged. Other containers append .mp4;
         compatible H.264 is stream-copied where possible and other audio becomes AAC.
@@ -920,7 +922,7 @@ paths:
       operationId: retryTranslations
       summary: Retry failed English translations and resume a blocked worker
       description: Requeues failed entries and clears an authentication/quota pause. Ready cached translations are
-        preserved. Correct credentials require restarting serve with the new DEEPL_API_KEY; retry after increasing
+        preserved. Correct credentials require restarting serve with the new translation.api_key (YAML, ENV or flag); retry after increasing
         a provider quota to resume without restarting.
       responses:
         '202':
@@ -1880,7 +1882,7 @@ paths:
         HEIC uses libheif for full grid assembly and orientation, never a single HEVC
         tile. Ambiguous multi-image HEIF containers retain the source with an error.
         Unsupported codecs, missing tools, and animated sources requiring conversion
-        keep the source with thumbnail_status=error. Videos normalize to H.264/yuv420p MP4,
+        keep the source with thumbnail_status=error. Videos normalize to H.264 8-bit 4:2:0 MP4 (yuv420p or full-range yuvj420p),
         maximum 1920x1080 landscape or 1080x1920 portrait, preserving aspect ratio without
         upscaling. Compatible MP4/M4V files remain unchanged. Other containers append .mp4;
         compatible H.264 is stream-copied where possible and other audio becomes AAC.
@@ -2556,7 +2558,8 @@ paths:
       tags:
       - Configuration
       operationId: getApplicationConfiguration
-      summary: Read effective and pending settings without connection secrets
+      summary: Read effective and pending settings without credentials
+      description: Effective nonsecret settings for every group, redacted active/pending database displays, and ENV/flag override sources. Credential fields are never returned. Settings outside database are edited through YAML, ENV or flags and applied at startup.
       security:
       - adminSession: []
       - adminSessionDevelopment: []
@@ -3351,6 +3354,455 @@ paths:
       description: 'Administrator only, Cache-Control: private, no-store. Originals stay unchanged in the inbox. Byte ranges,
         HEAD and conditional requests are supported. Same format=auto/original/jpeg rules as normal photo assets; HEIC
         auto mode receives cached JPEG.'
+  /api/v1/admin/dives/{id}/resync:
+    post:
+      tags:
+      - Activity resync
+      operationId: resyncDiveData
+      summary: Queue metadata resync for one stored dive
+      description: Returns immediately with a durable job and Location URL. All targets are already stored dives;
+        bulk snapshots the IDs at enqueue time and does not discover new Garmin activities. Requests only Garmin activity/dive
+        documents. FIT files, decoded FIT and indexed profile data are never fetched or rewritten, including when
+        FIT is absent. Local media, covers, country/trip overrides and favorites are retained. One active job is allowed.
+        Per-activity changes become visible after their metadata/result transaction commits. Configure DIVELOG_GARMIN_PERSONAL_API_KEY
+        on serve (YAML garmin.personal_api_key or -garmin-personal-api-key also work), or an explicit
+        garmin.resync_token_file (DIVELOG_GARMIN_RESYNC_TOKEN_FILE / -garmin-resync-token-file); jobs use the existing paced Garmin client. No request body.
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
+      responses:
+        '202':
+          description: Job accepted; may already be running/completed when returned. Poll the returned URL.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResyncJob'
+          headers:
+            Location:
+              description: Origin-relative job detail URL.
+              schema:
+                type: string
+        '400':
+          description: Invalid identifier, cursor, page limit or result filter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator session required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: SQL or job state could not be read/saved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: not_configured before setup; garmin_not_configured or invalid_garmin_configuration when the
+            serving process lacks usable Garmin configuration; resync_unavailable if the service is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Cross-origin write rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Stored dive or resync job not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: 'resync_in_progress: another job is queued/running; Location identifies the active job.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            Location:
+              schema:
+                type: string
+    parameters:
+    - $ref: '#/components/parameters/ActivityID'
+  /api/v1/admin/dives/resync:
+    post:
+      tags:
+      - Activity resync
+      operationId: resyncAllDiveData
+      summary: Queue metadata resync for all stored dives
+      description: Returns immediately with a durable job and Location URL. All targets are already stored dives;
+        bulk snapshots the IDs at enqueue time and does not discover new Garmin activities. Requests only Garmin activity/dive
+        documents. FIT files, decoded FIT and indexed profile data are never fetched or rewritten, including when
+        FIT is absent. Local media, covers, country/trip overrides and favorites are retained. One active job is allowed.
+        Per-activity changes become visible after their metadata/result transaction commits. Configure DIVELOG_GARMIN_PERSONAL_API_KEY
+        on serve (YAML garmin.personal_api_key or -garmin-personal-api-key also work), or an explicit
+        garmin.resync_token_file (DIVELOG_GARMIN_RESYNC_TOKEN_FILE / -garmin-resync-token-file); jobs use the existing paced Garmin client. No request body.
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
+      responses:
+        '202':
+          description: Job accepted; may already be running/completed when returned. Poll the returned URL.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResyncJob'
+          headers:
+            Location:
+              description: Origin-relative job detail URL.
+              schema:
+                type: string
+        '400':
+          description: Invalid identifier, cursor, page limit or result filter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator session required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: SQL or job state could not be read/saved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: not_configured before setup; garmin_not_configured or invalid_garmin_configuration when the
+            serving process lacks usable Garmin configuration; resync_unavailable if the service is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Cross-origin write rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: 'resync_in_progress: another job is queued/running; Location identifies the active job.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            Location:
+              schema:
+                type: string
+  /api/v1/admin/resync/status:
+    get:
+      tags:
+      - Activity resync
+      operationId: getActivityResyncStatus
+      summary: Read activity resync availability and current/latest job
+      description: Admin-only, local SQL read without a Garmin request. Poll every 2 seconds while an admin resync
+        UI is visible. available describes configured server credentials, not whether Garmin will accept them. busy
+        is true only for a queued/running job. active_job and latest_job are null when absent; history remains readable
+        when credentials are removed.
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResyncStatus'
+        '400':
+          description: Invalid identifier, cursor, page limit or result filter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator session required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: SQL or job state could not be read/saved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Application not configured or resync service unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/admin/resync/jobs:
+    get:
+      tags:
+      - Activity resync
+      operationId: listActivityResyncJobs
+      summary: List persisted activity resync jobs
+      description: Newest first by creation time and ID. History survives restarts. Cursor is opaque; terminal statuses
+        are succeeded, partial, failed, canceled and interrupted.
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResyncJobList'
+        '400':
+          description: Invalid identifier, cursor, page limit or result filter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator session required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: SQL or job state could not be read/saved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Application not configured or resync service unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      parameters:
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 20
+      - name: cursor
+        in: query
+        schema:
+          type: string
+  /api/v1/admin/resync/jobs/{jobID}:
+    parameters:
+    - name: jobID
+      in: path
+      schema:
+        type: string
+        pattern: ^[a-f0-9]{32}$
+      required: true
+    get:
+      tags:
+      - Activity resync
+      operationId: getActivityResyncJob
+      summary: Read resync progress and outcome
+      description: completed=succeeded+failed. skipped counts activities not attempted/completed because of cancellation,
+        interruption or a fatal error. remaining excludes skipped. progress_percent=100*completed/total (100 for an
+        empty successful job), so canceled/interrupted/fatal jobs may end below 100. Use status, not percentage, to
+        detect completion. Current phase is informational; fetching can include Garmin authentication/renewal and
+        cooldown waits.
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResyncJob'
+        '400':
+          description: Invalid identifier, cursor, page limit or result filter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator session required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: SQL or job state could not be read/saved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Application not configured or resync service unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Stored dive or resync job not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/admin/resync/jobs/{jobID}/items:
+    parameters:
+    - name: jobID
+      in: path
+      schema:
+        type: string
+        pattern: ^[a-f0-9]{32}$
+      required: true
+    get:
+      tags:
+      - Activity resync
+      operationId: listActivityResyncItems
+      summary: List per-activity resync results
+      description: Activity IDs ascending; optional status filter. Errors have safe stable codes/messages, never raw
+        Garmin response bodies or credentials. Authentication failure or persistent Garmin 429 stops the batch and
+        skips remaining items. Ordinary per-activity failures retain stored data and allow other targets to continue.
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResyncItemList'
+        '400':
+          description: Invalid identifier, cursor, page limit or result filter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator session required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: SQL or job state could not be read/saved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Application not configured or resync service unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Stored dive or resync job not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      parameters:
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 50
+      - name: cursor
+        in: query
+        schema:
+          type: string
+      - name: status
+        in: query
+        schema:
+          type: string
+          enum:
+          - queued
+          - running
+          - succeeded
+          - failed
+          - skipped
+  /api/v1/admin/resync/jobs/{jobID}/cancel:
+    parameters:
+    - name: jobID
+      in: path
+      schema:
+        type: string
+        pattern: ^[a-f0-9]{32}$
+      required: true
+    post:
+      tags:
+      - Activity resync
+      operationId: cancelActivityResyncJob
+      summary: Request cancellation of an activity resync job
+      description: No body. Persist the cancellation request and cancel in-flight Garmin waits/requests. Return 202
+        when the job was active, or 200 unchanged when already terminal. Cancellation is best effort; already committed
+        activity changes stay saved. Poll until terminal. Restart/shutdown interrupts unfinished jobs; they are not
+        silently resumed.
+      security:
+      - adminSession: []
+      - adminSessionDevelopment: []
+      responses:
+        '202':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResyncJob'
+        '400':
+          description: Invalid identifier, cursor, page limit or result filter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Administrator session required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: SQL or job state could not be read/saved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Application not configured or resync service unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Cross-origin write rejected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Stored dive or resync job not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '200':
+          description: Job was already terminal; no new cancellation work.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResyncJob'
 components:
   securitySchemes:
     adminSession:
@@ -3363,7 +3815,7 @@ components:
       type: apiKey
       in: cookie
       name: garmindives_session
-      description: Local HTTP development only when GARMIN_COOKIE_SECURE=false. Production uses adminSession over HTTPS.
+      description: Local HTTP development only when DIVELOG_COOKIE_SECURE=false. Production uses adminSession over HTTPS.
   parameters:
     MediaImageFormat:
       name: format
@@ -4040,7 +4492,7 @@ components:
           - error
           - disabled
           description: pending waits for background processing; ready exposes available English fields; error requires
-            retry or provider recovery; disabled means no DEEPL_API_KEY and no cached result. Existing ready cache entries
+            retry or provider recovery; disabled means no DIVELOG_DEEPL_API_KEY and no cached result. Existing ready cache entries
             work without a key.
         comment:
           type: string
@@ -4795,6 +5247,56 @@ components:
       - max_upload_bytes
       - pending_directory
       - pending_scan_interval
+    GarminSettings:
+      type: object
+      description: Effective Garmin settings. API key, email, password and MFA code are never returned.
+      properties:
+        token_file:
+          type: string
+          description: CLI cache path; empty selects the automatic path.
+        resync_token_file:
+          type: string
+          description: Serve cache path; empty selects the automatic path.
+        request_interval:
+          type: string
+          example: 2s
+      required: [token_file, resync_token_file, request_interval]
+    TranslationSettings:
+      type: object
+      description: Effective DeepL settings; API key is never returned.
+      properties:
+        url:
+          type: string
+          description: Empty selects the Free/Pro origin from the key.
+        target_lang:
+          type: string
+          enum: [EN-GB, EN-US]
+        glossary_id:
+          type: string
+        interval:
+          type: string
+          example: 2s
+      required: [url, target_lang, glossary_id, interval]
+    GeocodingSettings:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        url:
+          type: string
+        user_agent:
+          type: string
+        interval:
+          type: string
+          example: 15s
+      required: [enabled, url, user_agent, interval]
+    LoggingSettings:
+      type: object
+      properties:
+        level:
+          type: string
+          enum: [debug, info, warn, error, fatal]
+      required: [level]
     Configuration:
       type: object
       properties:
@@ -4808,6 +5310,14 @@ components:
           $ref: '#/components/schemas/AuthSettings'
         media:
           $ref: '#/components/schemas/MediaSettings'
+        garmin:
+          $ref: '#/components/schemas/GarminSettings'
+        translation:
+          $ref: '#/components/schemas/TranslationSettings'
+        geocoding:
+          $ref: '#/components/schemas/GeocodingSettings'
+        logging:
+          $ref: '#/components/schemas/LoggingSettings'
         overrides:
           type: object
           additionalProperties:
@@ -4821,6 +5331,10 @@ components:
       - http
       - auth
       - media
+      - garmin
+      - translation
+      - geocoding
+      - logging
       - overrides
       - restart_required
     ConfigurationPatch:
@@ -5068,3 +5582,176 @@ components:
           example: 2
         scan:
           $ref: '#/components/schemas/PendingScanStatus'
+
+    ResyncJob:
+      type: object
+      required:
+      - id
+      - scope
+      - status
+      - phase
+      - cancel_requested
+      - total
+      - completed
+      - succeeded
+      - failed
+      - skipped
+      - remaining
+      - progress_percent
+      - created_at
+      - url
+      - items_url
+      properties:
+        id:
+          type: string
+        scope:
+          type: string
+          enum:
+          - activity
+          - all
+        activity_id:
+          type: integer
+          minimum: 0
+          format: int64
+          description: Present for a single-activity scope.
+        status:
+          type: string
+          enum:
+          - queued
+          - running
+          - succeeded
+          - partial
+          - failed
+          - canceled
+          - interrupted
+        phase:
+          type: string
+          enum:
+          - queued
+          - authenticating
+          - fetching
+          - saving
+          - idle
+        cancel_requested:
+          type: boolean
+        current_activity_id:
+          type: integer
+          minimum: 0
+          format: int64
+        total:
+          type: integer
+          minimum: 0
+        completed:
+          type: integer
+          minimum: 0
+          description: Succeeded plus failed; excludes skipped.
+        succeeded:
+          type: integer
+          minimum: 0
+        failed:
+          type: integer
+          minimum: 0
+        skipped:
+          type: integer
+          minimum: 0
+        remaining:
+          type: integer
+          minimum: 0
+          description: Total minus succeeded, failed and skipped.
+        progress_percent:
+          type: number
+          minimum: 0
+          maximum: 100
+        error_code:
+          type: string
+        error:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        url:
+          type: string
+        items_url:
+          type: string
+    ResyncItem:
+      type: object
+      required:
+      - activity_id
+      - status
+      properties:
+        activity_id:
+          type: integer
+          minimum: 0
+          format: int64
+        status:
+          type: string
+          enum:
+          - queued
+          - running
+          - succeeded
+          - failed
+          - skipped
+        error_code:
+          type: string
+        error:
+          type: string
+        completed_at:
+          type: string
+          format: date-time
+    ResyncStatus:
+      type: object
+      required:
+      - available
+      - busy
+      - active_job
+      - latest_job
+      - poll_interval_seconds
+      properties:
+        available:
+          type: boolean
+        unavailable_code:
+          type: string
+        busy:
+          type: boolean
+        active_job:
+          type: object
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/ResyncJob'
+        latest_job:
+          type: object
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/ResyncJob'
+        poll_interval_seconds:
+          type: integer
+          minimum: 0
+          example: 2
+    ResyncJobList:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResyncJob'
+        next_cursor:
+          type: string
+    ResyncItemList:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResyncItem'
+        next_cursor:
+          type: string

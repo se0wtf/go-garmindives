@@ -36,7 +36,7 @@ func (p *countedVideoProcessor) Inspect(ctx context.Context, input *os.File) (me
 	return probe, err
 }
 
-func appVideoFixture(t *testing.T, size, codec, ext string) []byte {
+func appVideoFixture(t *testing.T, size, codec, ext string, extra ...string) []byte {
 	t.Helper()
 	p := mediaproc.NewProcessor()
 	if p.FFmpeg == "" || p.FFprobe == "" {
@@ -47,6 +47,7 @@ func appVideoFixture(t *testing.T, size, codec, ext string) []byte {
 	if codec == "libx265" {
 		args = append(args, "-x265-params", "pools=none:frame-threads=1:log-level=error")
 	}
+	args = append(args, extra...)
 	args = append(args, path)
 	if output, err := exec.Command(p.FFmpeg, args...).CombinedOutput(); err != nil {
 		t.Fatalf("video fixture: %s %v", output, err)
@@ -159,6 +160,52 @@ func TestVideoFailureRollbackAndRetry(t *testing.T) {
 	if err != nil || m.Filename != "Old.mov.mp4" || m.ThumbnailStatus != "ready" {
 		t.Fatalf("retry lost identity: %+v %v", m, err)
 	}
+}
+
+func TestVideoFullRangePreservationAndFailedSourceRetry(t *testing.T) {
+	t.Run("compatible MP4 unchanged", func(t *testing.T) {
+		l, _ := mediaTestLibrary(t)
+		processor := &countedVideoProcessor{Processor: mediaproc.NewProcessor()}
+		l.processor = processor
+		body := appVideoFixture(t, "216x384", "libx264", "mp4", "-vf", "setparams=range=full", "-color_range", "pc")
+		m, err := l.Upload(context.Background(), 42, "Full range.MP4", bytes.NewReader(body), nil)
+		if err != nil || m.ThumbnailStatus != "ready" || processor.conversions != 0 {
+			t.Fatalf("compatible full-range upload: %+v %v, conversions=%d", m, err, processor.conversions)
+		}
+		if _, err := l.Scan(context.Background(), true); err != nil {
+			t.Fatal(err)
+		}
+		retained, err := l.root.ReadFile(m.owner().path(m.Filename))
+		if err != nil || !bytes.Equal(retained, body) || processor.conversions != 0 {
+			t.Fatal("full-range video was unnecessarily recompressed")
+		}
+	})
+	t.Run("retained MOV retries", func(t *testing.T) {
+		l, _ := mediaTestLibrary(t)
+		body := appVideoFixture(t, "216x384", "libx265", "mov", "-vf", "setparams=range=full", "-color_range", "pc")
+		old, err := l.Upload(context.Background(), 42, "Camera.MOV", bytes.NewReader(body), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		old.ThumbnailStatus, old.ThumbnailError = "error", "encoded video failed verification: pixels=yuvj420p"
+		old.Description = "Coral reef"
+		old.Favorite = true
+		if err := l.store.saveMedia(context.Background(), old); err != nil {
+			t.Fatal(err)
+		}
+		l.processor = mediaproc.NewProcessor()
+		result, err := l.Scan(context.Background(), false)
+		if err != nil || result.Failed != 0 || result.Updated != 1 {
+			t.Fatalf("failed source retry: %+v %v", result, err)
+		}
+		m, err := l.store.mediaByID(context.Background(), 42, old.ID)
+		if err != nil || m.Filename != "Camera.MOV.mp4" || m.ThumbnailStatus != "ready" || m.Description != old.Description || !m.Favorite {
+			t.Fatalf("retry did not preserve media: %+v %v", m, err)
+		}
+		if _, err := l.root.Stat("42/Camera.MOV"); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatal("successful retry did not retire source")
+		}
+	})
 }
 
 func TestVideoTripScanAndSphereProvenance(t *testing.T) {

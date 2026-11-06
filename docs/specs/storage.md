@@ -31,7 +31,7 @@ the indexed summaries/samples. Retain the cached data for future offline decodin
 ## Relational schema
 
 [schema.sqlite.sql](schema.sqlite.sql) was exported from a fresh, fully migrated
-schema-12 database without user rows. It includes all columns, checks, foreign
+schema-13 database without user rows. It includes all columns, checks, foreign
 keys, explicit indexes, migration markers, and the initial pacing singleton. It
 is a reference snapshot, **not** a script to apply over an existing installation.
 Do not run it to upgrade a database or to create fake setup credentials.
@@ -45,6 +45,8 @@ Do not run it to upgrade a database or to create fake setup credentials.
 | dive_alerts | dive_id + alert_index | Recognized alerts / raw source data |
 | dive_fit_files | dive_id + file_index | Exact original FIT bytes, filename, size, SHA-256 |
 | dive_media | random ID | Dive-owned attachments; unique dive_id + filename |
+| resync_jobs | random ID | Persistent administrator metadata-refresh jobs, one active job |
+| resync_items | job_id + activity_id | Per-target status/errors; no FIT payloads |
 | pending_media | random ID / unique filename | Private inbox metadata, candidates and assignment receipts |
 | home_countries | random ID | Inclusive dated residence; overlap enforced by serialized application logic |
 | dive_trips | random ID | Editorial trip, override flags, dates, soft deletion, anchor dive |
@@ -98,7 +100,7 @@ permits forward references and is not directly PostgreSQL executable.
 ## Transactions and concurrency
 
 Migrations run one version per transaction, marking that version only after its
-DDL/backfill succeeds. A database newer than schema 12 is rejected. Fresh databases
+DDL/backfill succeeds. A database newer than schema 13 is rejected. Fresh databases
 apply every version; upgrades apply only missing versions. Concurrent deployment
 should avoid racing multiple migration processes; the reference does not expose a
 separate production migrate command or a general distributed migration coordinator.
@@ -117,6 +119,7 @@ separate production migrate command or a general distributed migration coordinat
 | 10 | Countries, residence, trips, trip media, favorites, geocoding queue/pacing |
 | 11 | Single administrator and SQL sessions |
 | 12 | Pending media inbox/assignment receipts; capture_json on both media owner tables |
+| 13 | Administrator data-only resync jobs and target results, active-job uniqueness |
 
 FIT migration rejects invalid/empty/oversized retained bytes and rolls back that
 migration. FIT readback verifies size and SHA-256 before decoding. Keep the original

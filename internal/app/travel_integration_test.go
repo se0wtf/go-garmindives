@@ -153,10 +153,10 @@ func TestRunServeBackfillsCountriesAndTripsWithMockProvider(t *testing.T) {
 		_, _ = w.Write([]byte(`{"address":{"country_code":"eg"}}`))
 	}))
 	defer provider.Close()
-	t.Setenv("GARMIN_GEOCODING_ENABLED", "true")
-	t.Setenv("GARMIN_GEOCODING_URL", provider.URL)
-	t.Setenv("GARMIN_GEOCODING_INTERVAL", "1ms")
-	t.Setenv("GARMIN_GEOCODING_USER_AGENT", "go-garmindives/test")
+	t.Setenv("DIVELOG_GEOCODING_ENABLED", "true")
+	t.Setenv("DIVELOG_GEOCODING_URL", provider.URL)
+	t.Setenv("DIVELOG_GEOCODING_INTERVAL", "1ms")
+	t.Setenv("DIVELOG_GEOCODING_USER_AGENT", "go-garmindives/test")
 	err := runServeWithDependencies(context.Background(), configuredServeArgs(t, s, []string{"-output-type", "sqlite", "-assets-dir", t.TempDir()}), io.Discard, testLogger(t), func(context.Context, string, string) (*sqlStore, error) { return s, nil }, func(ctx context.Context, _ string, app *application, _ *charmLog.Logger) error {
 		store := waitApplicationReady(t, app).store
 		h := newAPIHandler(store, testLogger(t))

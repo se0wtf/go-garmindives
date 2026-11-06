@@ -25,10 +25,10 @@ const (
 )
 
 func FromEnvironment(logger *charmLog.Logger) (*http.Client, error) {
-	configured := envutil.Default("GARMIN_REQUEST_INTERVAL", DefaultRequestInterval.String())
+	configured := envutil.Default("DIVELOG_GARMIN_REQUEST_INTERVAL", DefaultRequestInterval.String())
 	interval, err := time.ParseDuration(configured)
 	if err != nil || interval <= 0 {
-		return nil, errors.New("GARMIN_REQUEST_INTERVAL must be a positive duration, for example 2s or 5s")
+		return nil, errors.New("DIVELOG_GARMIN_REQUEST_INTERVAL must be a positive duration, for example 2s or 5s")
 	}
 	return NewClient(interval, logger)
 }

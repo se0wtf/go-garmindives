@@ -23,7 +23,7 @@ media:
   pending_scan_interval: 60s
 ```
 
-`GARMIN_PENDING_DIR` and `GARMIN_PENDING_SCAN_INTERVAL` override YAML. The interval
+`DIVELOG_PENDING_DIR` and `DIVELOG_PENDING_SCAN_INTERVAL` override YAML. The interval
 is a Go duration between 1 second and 24 hours. Changes require restarting serve.
 The sync command does not scan the inbox and makes no filesystem imports.
 
@@ -167,7 +167,7 @@ cleaned up. Already committed media is not silently moved/deleted by inbox edits
 Directory listing failure never prunes SQL entries. Missing pending files prune
 unassigned entries; recorded assignments are recovered before deciding cleanup.
 The worker is part of the single serve process; it is not a distributed filesystem
-import queue. Deploy serve/sync from the same schema-12-compatible version.
+import queue. Deploy serve/sync from the same schema-13-compatible version.
 
 Tests: [metadata](../../internal/media/capture_test.go),
 [matching](../../internal/app/pending_match_test.go),

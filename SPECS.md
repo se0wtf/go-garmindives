@@ -4,7 +4,7 @@ This is the product and implementation specification for a personal, bilingual
 diving logbook. It is intended both for an agent building the frontend and for an
 engineer implementing a compatible backend in another language.
 
-Baseline: SQL schema **12**, application configuration
+Baseline: SQL schema **13**, application configuration
 version **1**, decoded FIT document version **1**, photo processing profile **1**, video processing profile **1**, HTTP API `/api/v1`.
 These documents describe implemented behavior, not a proposed roadmap.
 
@@ -22,6 +22,10 @@ The [pending media inbox](docs/specs/pending-media.md) describes capture-time as
 private review, configuration, and interrupted-import recovery.
 The [video processing specification](docs/specs/video-processing.md) defines H.264/1080p
 normalization, edited GoPro timestamps, 360 behavior and source cleanup.
+The [runtime settings reference](docs/specs/settings.md) lists all YAML keys, flags,
+ENV names, defaults, precedence and secret handling.
+The [admin resync guide](docs/specs/resync.md) defines metadata-only Garmin refresh,
+persisted jobs, progress polling, credentials and cancellation.
 
 The specification is a package. Prose defines concepts, ownership, algorithms,
 and lifecycle; OpenAPI defines the exact HTTP field names, nullability, enums,

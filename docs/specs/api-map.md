@@ -2,7 +2,7 @@
 
 [Specification index](../../SPECS.md) · [Frontend flows](frontend.md) · [OpenAPI contract](../openapi.yaml)
 
-This inventory is extracted from the schema-12 baseline OpenAPI document. Use the
+This inventory is extracted from the schema-13 baseline OpenAPI document. Use the
 linked contract for exact request/response schemas, required fields, nullable
 properties, error codes, and examples. Domain behavior is specified in the prose
 guides; the interactive Swagger UI is available at `/swagger/` (also `/docs`).
@@ -87,6 +87,14 @@ OPTIONS returns 204. Cookie auth and CSRF apply as described in
 | GET | `/api/v1/admin/media/pending/{pendingID}/file` | Admin | Read a pending original or JPEG representation | — | `format` | 200, 206, 304, 400, 401, 404, 409, 412, 416, 500, 503 |
 | HEAD | `/api/v1/admin/media/pending/{pendingID}/file` | Admin | Read pending image headers | — | `format` | 200, 206, 304, 400, 401, 404, 409, 412, 416, 500, 503 |
 
+| POST | `/api/v1/admin/dives/{id}/resync` | Admin | Queue metadata resync for one stored dive | — | — | 202, 400, 401, 403, 404, 409, 500, 503 |
+| POST | `/api/v1/admin/dives/resync` | Admin | Queue metadata resync for all stored dives | — | — | 202, 400, 401, 403, 409, 500, 503 |
+| GET | `/api/v1/admin/resync/status` | Admin | Read activity resync availability and current/latest job | — | — | 200, 400, 401, 500, 503 |
+| GET | `/api/v1/admin/resync/jobs` | Admin | List persisted activity resync jobs | — | `limit`, `cursor` | 200, 400, 401, 500, 503 |
+| GET | `/api/v1/admin/resync/jobs/{jobID}` | Admin | Read resync progress and outcome | — | — | 200, 400, 401, 404, 500, 503 |
+| GET | `/api/v1/admin/resync/jobs/{jobID}/items` | Admin | List per-activity resync results | — | `limit`, `cursor`, `status` | 200, 400, 401, 404, 500, 503 |
+| POST | `/api/v1/admin/resync/jobs/{jobID}/cancel` | Admin | Request cancellation of an activity resync job | — | — | 200, 202, 400, 401, 403, 404, 500, 503 |
+
 ## Representation rules
 
 - API prefix: `/api/v1`; original media paths are under `/assets`. Returned URLs are origin-relative.
@@ -98,6 +106,8 @@ OPTIONS returns 204. Cookie auth and CSRF apply as described in
 | Collection | Cursor payload | Order / next-page condition |
 | --- | --- | --- |
 | Dives | `{ "date": "YYYY-MM-DD", "time": "...", "id": 123 }` | local_date DESC, start_time DESC, id DESC; lexicographically smaller tuple |
+| Resync jobs | `{ "created_at_ms": 1, "id": "..." }` | creation milliseconds DESC, id DESC; tuple strictly smaller |
+| Resync items | `{ "activity_id": 123 }` | activity_id ASC; strictly greater |
 | Samples | `{ "index": 42 }` | sample_index ASC; index strictly greater |
 | Owner media / favorites / pending inbox | `{ "filename": "...", "id": "..." }` | filename ASC, id ASC; tuple strictly greater |
 | Trips | `{ "start_date": "YYYY-MM-DD", "id": "..." }` | start_date DESC, id DESC; tuple strictly smaller |
@@ -133,8 +143,9 @@ alone cannot express:
 
 ## Not exposed by HTTP
 
-Garmin synchronization and single-dive refresh are CLI commands. There is no
-public endpoint to delete a dive, change its imported notes/rating/name/date/GPS,
+Garmin discovery/FIT synchronization remains a CLI command. Administrator metadata
+resync jobs refresh one/all stored dives as described in [the resync guide](resync.md).
+There is no public endpoint to delete a dive or directly edit its imported notes/rating/name/date/GPS,
 move media between owners, undelete a trip,
 or trigger server restarts. Any new frontend control
 requiring these behaviors needs an explicit backend feature, not a guessed route.

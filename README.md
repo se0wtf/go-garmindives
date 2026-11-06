@@ -48,7 +48,7 @@ Host bind mounts must be writable by this UID/GID. No personal config, database,
 media, or credentials are copied into the image.
 
 Complete setup through the frontend as described below. Secure cookies are enabled
-for production HTTPS; for local HTTP testing add `-e GARMIN_COOKIE_SECURE=false`
+for production HTTPS; for local HTTP testing add `-e DIVELOG_COOKIE_SECURE=false`
 to `docker run`. The published port above is local to the host; a frontend container
 should reach the backend on a shared Docker network at port 8080.
 
@@ -64,7 +64,7 @@ docker run --rm \
 
 Put Garmin credentials/API key in the private runtime env file. The default token
 cache lives under `/tokens/go-garmindives/`; persist it across sync runs. PostgreSQL
-uses the usual YAML or `GARMIN_DB_TYPE` / `GARMIN_DB_URI` settings in both backend
+uses the usual YAML or `DIVELOG_DB_TYPE` / `DIVELOG_DB_URI` settings in both backend
 roles. Schedule the sync invocation externally; the image has no internal cron.
 CLI arguments after the image replace `serve`, for example
 `admin reset-password` (use `docker run -it` for its password prompt).
@@ -79,15 +79,21 @@ Start the API, even before a database has been configured:
 
 ```sh
 # Local HTTP development; keep secure cookies enabled behind production HTTPS.
-GARMIN_COOKIE_SECURE=false go-garmindives serve -config ./config.yaml
+DIVELOG_COOKIE_SECURE=false go-garmindives serve -config ./config.yaml
 ```
 
-`-config` or `GARMIN_CONFIG` selects the file (default `config.yaml`). See
-[`config.example.yaml`](config.example.yaml). Relative SQLite paths and media
+`-config` or `DIVELOG_CONFIG` selects the file (default `config.yaml`). See
+[`config.example.yaml`](config.example.yaml) and the [complete settings matrix](docs/specs/settings.md).
+All 28 runtime settings, including Garmin/DeepL/geocoding/logging, support flags,
+ENV, YAML and built-in defaults. All application ENV names use `DIVELOG_`:
+`DIVELOG_GARMIN_*` for Garmin, `DIVELOG_DEEPL_*` for DeepL, and names such as
+`DIVELOG_GEOCODING_ENABLED` for application features. Update deployments using
+the previous ENV names; those are no longer read. YAML keys and flags are unchanged.
+Relative SQLite paths and media
 directories resolve against the configuration directory. Explicit command flags
 win over **ENV → YAML → defaults**. The YAML file is saved atomically with mode
-`0600`. `GARMIN_DB_TYPE` and `GARMIN_DB_URI` override `database.type` and
-`database.uri`; the older `GARMIN_OUTPUT_TYPE` / `GARMIN_OUTPUT_DSN` aliases also
+`0600`. `DIVELOG_DB_TYPE` and `DIVELOG_DB_URI` override `database.type` and
+`database.uri`; the older `DIVELOG_OUTPUT_TYPE` / `DIVELOG_OUTPUT_DSN` aliases also
 work, with the newer names taking precedence. ENV secrets are not copied into
 the YAML file automatically.
 
@@ -167,7 +173,7 @@ as a command argument or stores it in YAML.
 Sessions use SCS with the existing SQL database. Only token digests are stored.
 The cookie is `HttpOnly`, host-only, `SameSite=Strict`, `Path=/`, and `Secure` by
 default (`__Host-garmindives_session`). For explicit local HTTP development,
-`GARMIN_COOKIE_SECURE=false` uses `garmindives_session`. Same-origin browser
+`DIVELOG_COOKIE_SECURE=false` uses `garmindives_session`. Same-origin browser
 requests send cookies automatically; JavaScript should not store session tokens.
 Go's cross-origin protection rejects cross-site writes, including login and setup.
 Wildcard CORS is disabled. Password-attempt rate limits use the connection's peer
@@ -188,9 +194,9 @@ media:
   max_upload_bytes: 17179869184
 ```
 
-ENV overrides: `GARMIN_API_ADDR`, `GARMIN_COOKIE_SECURE`, `GARMIN_PUBLIC_URL`,
-`GARMIN_SESSION_LIFETIME`, `GARMIN_SESSION_IDLE_TIMEOUT`, `GARMIN_ASSETS_DIR`,
-`GARMIN_MEDIA_MAX_UPLOAD_BYTES`. Durations use Go syntax (`24h`, not `1d`). Sessions
+ENV overrides: `DIVELOG_API_ADDR`, `DIVELOG_COOKIE_SECURE`, `DIVELOG_PUBLIC_URL`,
+`DIVELOG_SESSION_LIFETIME`, `DIVELOG_SESSION_IDLE_TIMEOUT`, `DIVELOG_ASSETS_DIR`,
+`DIVELOG_MEDIA_MAX_UPLOAD_BYTES`. Durations use Go syntax (`24h`, not `1d`). Sessions
 expire on idle timeout even before their absolute lifetime. Credential changes
 and logout take effect immediately; sessions otherwise survive backend restarts.
 
@@ -207,12 +213,12 @@ For a frontend, serve backend, sync backend, and SQL database on one server:
 - Share the **configuration directory** between the two backend containers;
   serve needs write access and sync can mount it read-only. Mount the directory,
   not just the file, because configuration saves use atomic replacement.
-- Use the same `GARMIN_CONFIG` path and SQL ENV overrides in both backends.
+- Use the same `DIVELOG_CONFIG` path and SQL ENV overrides in both backends.
   The sync command reads configuration on each invocation and checks the SQL
   initialization identity before contacting Garmin. It needs no browser login.
 - Start the frontend before setup is complete. Proxy `/api`, `/assets`, and docs
   to the serve backend under the same HTTPS origin, preserving `Host` and browser
-  origin/fetch headers. `GARMIN_PUBLIC_URL` can specify the external origin when
+  origin/fetch headers. `DIVELOG_PUBLIC_URL` can specify the external origin when
   the proxy changes `Host`. Keep the backend on the private container network.
 - `/healthz` is process liveness and is available before setup; `/readyz` returns
   `503` until normal APIs are ready and whenever the SQL connection fails its
@@ -233,7 +239,7 @@ Create a key in [Garmin Connect's Personal API settings](https://connect.garmin.
 and supply it to the sync command after initial setup:
 
 ```sh
-export GARMIN_PERSONAL_API_KEY='your-personal-api-key'
+export DIVELOG_GARMIN_PERSONAL_API_KEY='your-personal-api-key'
 go-garmindives
 ```
 
@@ -241,14 +247,15 @@ The key selects the official Personal API and takes precedence over cached
 legacy sessions and email/password credentials. The app exchanges it for a
 bearer token each run; the client automatically renews expiring tokens and
 retries a rejected token once. A rejected key returns an error. No email,
-password, MFA, or browser session is needed. The key is never written to disk
-or application logs.
+password, MFA, or browser session is needed. ENV/flag keys are not copied into
+storage; credentials may also be explicitly supplied in private YAML. Keys are
+never written to application logs.
 
 Personal API bearer tokens are saved as `go-garmindives/personal-tokens.json`
 under the operating system's user configuration directory, with owner-only
 permissions. Legacy tokens use `go-garmindives/tokens.json`. `-token-file`
 overrides either path. An unexpired Personal API cache can be resumed without
-the key by specifying its path; renewal requires `GARMIN_PERSONAL_API_KEY`.
+the key by specifying its path; renewal requires `DIVELOG_GARMIN_PERSONAL_API_KEY`.
 
 The Personal API returns the full activity document under `dive_details`,
 including `diveInfo` (weight, suit, gases, equipment, and settings), `summaryDTO`
@@ -281,15 +288,16 @@ L/min, and FIT ascent rate is in m/s. Field-level units are retained in `fit`.
 The Personal API still has `activity_details: null` because its graph JSON
 endpoint is unavailable; its profiles are decoded from FIT instead.
 
-Without `GARMIN_PERSONAL_API_KEY`, the app reuses a cached legacy session or
+Without `DIVELOG_GARMIN_PERSONAL_API_KEY`, the app reuses a cached legacy session or
 prompts for Garmin credentials and MFA. Credentials can also be supplied for
 non-interactive legacy use:
 
 ```sh
-GARMIN_EMAIL='you@example.com' GARMIN_PASSWORD='...' go-garmindives
+DIVELOG_GARMIN_EMAIL='you@example.com' DIVELOG_GARMIN_PASSWORD='...' go-garmindives
 ```
 
-The password is never stored. Legacy API tokens and the authenticated Garmin
+The password is not copied from ENV/flags into storage; it may be explicitly
+configured in private YAML. Legacy API tokens and the authenticated Garmin
 browser session needed by the Dive endpoint are cached under the operating
 system's user configuration directory with owner-only permissions. Later runs
 reuse the cached session and automatically refresh expiring API tokens. If Garmin expires
@@ -306,7 +314,7 @@ go-garmindives -output-dsn /path/to/dives.db
 The database path can also be configured through the environment:
 
 ```sh
-GARMIN_OUTPUT_DSN=/path/to/dives.db go-garmindives
+DIVELOG_OUTPUT_DSN=/path/to/dives.db go-garmindives
 ```
 
 `-output-type` and `-output-dsn` remain SQL-only command overrides. The selected
@@ -315,8 +323,8 @@ database must match the initialized configuration identity.
 For PostgreSQL, provide a standard connection URL:
 
 ```sh
-GARMIN_DB_TYPE=postgres \
-GARMIN_DB_URI='postgres://user:password@localhost:5432/garmindives?sslmode=require' \
+DIVELOG_DB_TYPE=postgres \
+DIVELOG_DB_URI='postgres://user:password@localhost:5432/garmindives?sslmode=require' \
 go-garmindives serve
 ```
 
@@ -419,10 +427,10 @@ Display the returned attribution when showing geocoded data:
 
 | Environment variable | Default / purpose |
 | --- | --- |
-| `GARMIN_GEOCODING_ENABLED` | `true`; set `false` to disable outgoing country requests |
-| `GARMIN_GEOCODING_URL` | `https://nominatim.openstreetmap.org`; switchable origin for a compatible provider/self-hosted instance |
-| `GARMIN_GEOCODING_INTERVAL` | `15s`; public Nominatim requires at least this interval for recurring background work |
-| `GARMIN_GEOCODING_USER_AGENT` | Identifying app name and repository URL; customize with your app/contact details |
+| `DIVELOG_GEOCODING_ENABLED` | `true`; set `false` to disable outgoing country requests |
+| `DIVELOG_GEOCODING_URL` | `https://nominatim.openstreetmap.org`; switchable origin for a compatible provider/self-hosted instance |
+| `DIVELOG_GEOCODING_INTERVAL` | `15s`; public Nominatim requires at least this interval for recurring background work |
+| `DIVELOG_GEOCODING_USER_AGENT` | Identifying app name and repository URL; customize with your app/contact details |
 
 - `GET /api/v1/countries/status`: active unique-position progress and attribution.
 - `POST /api/v1/countries/retry`: explicitly retry failed/unresolved positions.
@@ -580,7 +588,7 @@ Garmin quota.
 For slower imports, choose a positive Go duration through the environment:
 
 ```sh
-GARMIN_REQUEST_INTERVAL=5s go-garmindives
+DIVELOG_GARMIN_REQUEST_INTERVAL=5s go-garmindives
 ```
 
 On HTTP 429, the app honors `Retry-After` in either seconds or HTTP-date format.
@@ -644,7 +652,7 @@ go-garmindives serve -output-type sqlite -output-dsn /path/to/dives.db
 ```
 
 It listens on `127.0.0.1:8080` by default. Change this with `-listen` or
-`GARMIN_API_ADDR`. Reads are public after initial configuration; writes and
+`DIVELOG_API_ADDR`. Reads are public after initial configuration; writes and
 application settings require an administrator session. The browser frontend and
 API share one origin through the frontend proxy.
 
@@ -766,7 +774,7 @@ Set a DeepL API key when starting the REST server to automatically translate div
 comments/highlights and media captions/descriptions from French into English:
 
 ```sh
-export DEEPL_API_KEY='your-deepl-api-key'
+export DIVELOG_DEEPL_API_KEY='your-deepl-api-key'
 go-garmindives serve
 ```
 
@@ -810,15 +818,16 @@ are skipped. Cached English continues to work after a restart even without a key
 Original files, ratings, and raw Garmin documents are not sent to the provider.
 Only parsed comments/highlights and media captions/descriptions are translated.
 
-Configuration through the environment:
+The following ENV names also have YAML and flag equivalents in the
+[settings matrix](docs/specs/settings.md):
 
 | Variable | Default / purpose |
 | --- | --- |
-| `DEEPL_API_KEY` | Optional; enables provider calls; never stored or logged |
-| `DEEPL_TARGET_LANG` | `EN-GB`; also accepts `EN-US` |
-| `DEEPL_REQUEST_INTERVAL` | `2s`; any positive Go duration |
-| `DEEPL_API_URL` | `https://api-free.deepl.com` for keys ending in `:fx`, otherwise `https://api.deepl.com`; override with the origin shown for your API account |
-| `DEEPL_GLOSSARY_ID` | Optional French-to-English glossary for recurring dive/species names |
+| `DIVELOG_DEEPL_API_KEY` | Optional; enables provider calls; ENV/flag values are never copied to YAML or logged |
+| `DIVELOG_DEEPL_TARGET_LANG` | `EN-GB`; also accepts `EN-US` |
+| `DIVELOG_DEEPL_REQUEST_INTERVAL` | `2s`; any positive Go duration |
+| `DIVELOG_DEEPL_API_URL` | `https://api-free.deepl.com` for keys ending in `:fx`, otherwise `https://api.deepl.com`; override with the origin shown for your API account |
+| `DIVELOG_DEEPL_GLOSSARY_ID` | Optional French-to-English glossary for recurring dive/species names |
 
 The source language is fixed to `FR`. Requests include surrounding French prose
 and scuba-diving context to help disambiguate short highlights. See the official
@@ -881,7 +890,7 @@ go-garmindives serve -output-dsn /path/to/dives.db -assets-dir /path/to/assets
 ```
 
 `-assets-dir` defaults to `assets` in the working directory. It can also be set
-with `GARMIN_ASSETS_DIR`. Keep the same assets directory with its database.
+with `DIVELOG_ASSETS_DIR`. Keep the same assets directory with its database.
 Install **FFmpeg** (`ffmpeg` and `ffprobe`), **JPEG XL tools** (`cjxl` and `djxl`),
 and **libheif** (`heif-convert` or `heif-dec`, with an HEVC decoder) on `PATH`:
 `brew install ffmpeg jpeg-xl libheif` on macOS, or
@@ -961,7 +970,7 @@ An existing filename within the activity returns `409`; an existing source file
 is never overwritten, even if it has not been indexed yet. Re-upload of a missing
 original HEIC can repair an older conversion as described below. The default per-file
 upload limit is **16 GiB**, configurable with `-media-max-upload-bytes` or
-`GARMIN_MEDIA_MAX_UPLOAD_BYTES`; oversized uploads return `413`. Direct filesystem
+`DIVELOG_MEDIA_MAX_UPLOAD_BYTES`; oversized uploads return `413`. Direct filesystem
 imports have no upload-size limit. Uploads have a one-hour request read deadline.
 
 Media objects include `id`, `dive_id`, `filename`, `kind`, `content_type`,
@@ -1064,6 +1073,37 @@ with the retained JXL/MP4; keep a separate source backup if desired. Removing an
 its files; deleting an entire dive from SQL cascades its media metadata but leaves
 the originals available for a later reimport.
 
+## Refresh Garmin edits through the API
+
+Administrator-only background jobs can refresh the data of one stored dive or
+all stored dives. They never download or modify FIT files, decoded FIT or profile
+samples, including when FIT is missing. Local media, covers and overrides survive.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| POST | `/api/v1/admin/dives/{id}/resync` | Queue one stored dive |
+| POST | `/api/v1/admin/dives/resync` | Queue all stored dive IDs |
+| GET | `/api/v1/admin/resync/status` | Availability, active/latest job |
+| GET | `/api/v1/admin/resync/jobs` | Persistent job history |
+| GET | `/api/v1/admin/resync/jobs/{jobID}` | Progress, counters and final result |
+| GET | `/api/v1/admin/resync/jobs/{jobID}/items` | Per-activity results; optional status filter |
+| POST | `/api/v1/admin/resync/jobs/{jobID}/cancel` | Request cancellation |
+
+Start requests have no body and return **202**, a job and `Location`. Poll the
+returned URL every **2 seconds**. Only one job runs at a time; another start
+returns 409 with the active job's Location. Results distinguish success, partial
+failure, cancellation and interruption. Completed activity changes stay saved
+when a later activity fails. New Garmin dives still use normal CLI discovery.
+
+Configure `garmin.personal_api_key` on the **serve container** through YAML,
+`-garmin-personal-api-key`, or `DIVELOG_GARMIN_PERSONAL_API_KEY` to enable these APIs;
+its default resync token cache is separate from CLI sync. Alternatively set
+`DIVELOG_GARMIN_RESYNC_TOKEN_FILE` to an existing private cache. Request pacing uses
+`DIVELOG_GARMIN_REQUEST_INTERVAL` (default 2s). Normal serving remains available without
+Garmin credentials; status reports unavailable. Serve never prompts for login/MFA.
+See the [full resync/frontend guide](docs/specs/resync.md). Schema 13 requires
+updating both backend images together.
+
 ## Pending media inbox
 
 Drop original photos or videos into `<assets_dir>/pending` (`/assets/pending` for an assets
@@ -1096,7 +1136,7 @@ All inbox routes require an admin session under `/api/v1/admin/media/pending`:
 
 YAML `media.pending_directory` defaults to `pending`, relative to the assets root;
 absolute paths work too. `media.pending_scan_interval` defaults to `60s`.
-ENV overrides are `GARMIN_PENDING_DIR` and `GARMIN_PENDING_SCAN_INTERVAL`.
+ENV overrides are `DIVELOG_PENDING_DIR` and `DIVELOG_PENDING_SCAN_INTERVAL`.
 Local builds need `brew install exiftool` or `apt-get install libimage-exiftool-perl`;
 the Docker image already includes it. Resolve exports with only a render date
 remain pending; a preserved/restored capture tag enables matching. See the
@@ -1125,7 +1165,7 @@ migration from existing JSON, rollback, checksums, and cascading deletion.
 Request-pacing tests use a fake clock and cover concurrent callers, HTTP 429,
 `Retry-After`, retry limits, token renewal, and cancellation without contacting
 Garmin or waiting through real cooldowns.
-To validate the official API against one real dive with temporary SQLite storage, set `GARMIN_PERSONAL_API_KEY` and run:
+To validate the official API against one real dive with temporary SQLite storage, set `DIVELOG_GARMIN_PERSONAL_API_KEY` and run:
 
 ```sh
 go test ./internal/app -run '^TestGarminPersonalDiveIntegration$' -count=1 -v
@@ -1138,7 +1178,7 @@ requires an account containing at least one dive, downloads its details, and
 verifies that a second synchronization adds nothing:
 
 ```sh
-GARMIN_EMAIL='...' GARMIN_PASSWORD='...' GARMIN_MFA_CODE='...' \
+DIVELOG_GARMIN_EMAIL='...' DIVELOG_GARMIN_PASSWORD='...' DIVELOG_GARMIN_MFA_CODE='...' \
   go test ./internal/app -run TestGarminDiveIntegration -count=1 -v
 ```
 

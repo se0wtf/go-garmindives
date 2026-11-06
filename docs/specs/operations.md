@@ -7,14 +7,15 @@
 The reference binary requires Go 1.26+ to build. `go-garmindives` and
 `go-garmindives sync` are equivalent one-shot sync commands. `serve` is a long-running
 HTTP process. `admin reset-password` is an interactive local recovery command.
-Use `-help` / `serve -help` for flags. Runtime application settings are YAML plus
-ENV; Garmin/DeepL/geocoding settings listed below currently remain ENV-only.
+Use `-help` / `serve -help` for flags. All runtime settings support flags > ENV >
+YAML > defaults. See the [complete settings matrix](settings.md); the common
+flags are accepted by every command, including administrator password recovery.
 
 | Flag | Applies to | Meaning |
 | --- | --- | --- |
 | -config PATH | all roles | YAML settings file |
-| -output-type sqlite/postgres | sync/serve | SQL dialect override |
-| -output-dsn VALUE | sync/serve | SQLite file or PostgreSQL URI/DSN override |
+| -db-type sqlite/postgres (alias -output-type) | all roles | SQL dialect override |
+| -db-uri VALUE (alias -output-dsn) | all roles | SQLite file or PostgreSQL URI/DSN override |
 | -activity-id ID | sync | Refresh only this positive activity ID |
 | -token-file PATH | sync | Garmin token cache path |
 | -listen ADDR | serve | Listener override |
@@ -26,11 +27,11 @@ For same-server containers:
 | Role | Durable access / network |
 | --- | --- |
 | Frontend | Serve UI and proxy backend paths under the same HTTPS origin |
-| Serve backend | Writable config **directory**, SQL, assets; outgoing geocoding/optional DeepL; no Garmin credentials required |
+| Serve backend | Writable config **directory**, SQL, assets; outgoing geocoding/optional DeepL; optional Garmin credentials for admin data resync |
 | Sync backend | Readable config directory, same SQL settings, private Garmin token-cache volume; outgoing Garmin |
 | PostgreSQL | Persistent SQL volume; reachable by both backend roles |
 
-Use `http.listen: 0.0.0.0:8080` or GARMIN_API_ADDR in the serve container; the
+Use `http.listen: 0.0.0.0:8080` or DIVELOG_API_ADDR in the serve container; the
 loopback default is for local use. Share configuration by directory because saves
 rename the file. Mount SQLite storage too if using SQLite; paths/permissions must
 agree between roles. Match the config-reader UID/group to mode-0600 ownership.
@@ -38,10 +39,10 @@ The sync process does not need the media filesystem because it does not scan it.
 
 The proxy must forward `/api/`, `/assets/`, `/swagger/`, `/docs`, and any public
 probe paths being used. Preserve Host, Origin, and Sec-Fetch-Site. If Host changes,
-set the exact external origin in GARMIN_PUBLIC_URL. Preserve Range, conditional
+set the exact external origin in DIVELOG_PUBLIC_URL. Preserve Range, conditional
 headers, and response validators for video seeking. TLS terminates at the proxy;
 secure cookies stay enabled. Local HTTP testing uses explicit
-`GARMIN_COOKIE_SECURE=false`. The binary does not provision TLS certificates.
+`DIVELOG_COOKIE_SECURE=false`. The binary does not provision TLS certificates.
 
 Do not gate frontend startup on backend readiness: setup is rendered by the
 frontend while readiness is false. Start serve, visit the frontend setup page,
@@ -111,24 +112,31 @@ ENV secrets and volumes each time. Locks must cover all scheduled invocations;
 separate processes do not share the in-memory Garmin limiter. No credentialed
 browser login is needed by sync after application initialization.
 
-## Provider environment settings
+Metadata-only [admin resync jobs](resync.md) run inside serve, return asynchronous
+progress, and do not access FIT/profile data. They require Garmin credentials on
+serve and preserve history across restarts; no separate worker service is needed.
+
+## Provider settings
+
+These ENV names are aliases for the YAML/flag settings in the [settings matrix](settings.md).
 
 | Setting | Default / behavior |
 | --- | --- |
-| GARMIN_PERSONAL_API_KEY | Optional key; selects official Personal API and takes precedence over legacy |
-| GARMIN_EMAIL / GARMIN_PASSWORD | Legacy login; prompt if required/unset |
-| GARMIN_MFA_CODE | Legacy one-time MFA; prompt if required/unset |
-| GARMIN_REQUEST_INTERVAL | 2s, positive duration |
-| DEEPL_API_KEY | Optional; no key means no outgoing translation calls |
-| DEEPL_TARGET_LANG | EN-GB; EN-US also supported |
-| DEEPL_REQUEST_INTERVAL | 2s, positive duration |
-| DEEPL_API_URL | api-free.deepl.com for :fx key, otherwise api.deepl.com; HTTPS origin |
-| DEEPL_GLOSSARY_ID | Optional FR→EN glossary identifier |
-| GARMIN_GEOCODING_ENABLED | true; false disables outgoing lookup but retains cache/reconciliation |
-| GARMIN_GEOCODING_URL | https://nominatim.openstreetmap.org; compatible reverse-geocoding origin |
-| GARMIN_GEOCODING_INTERVAL | 15s; public Nominatim rejects a shorter configured gap |
-| GARMIN_GEOCODING_USER_AGENT | Identifying application/repository string; at least 8 characters, no CR/LF |
-| LOG_LEVEL | info; debug/info/warn/error/fatal supported |
+| DIVELOG_GARMIN_PERSONAL_API_KEY | Optional key for sync and serve-side admin resync; selects official Personal API |
+| DIVELOG_GARMIN_RESYNC_TOKEN_FILE | Optional serve-side private cache path; explicit cache enables resync without a key while the session is usable |
+| DIVELOG_GARMIN_EMAIL / DIVELOG_GARMIN_PASSWORD | Legacy login; prompt if required/unset |
+| DIVELOG_GARMIN_MFA_CODE | Legacy one-time MFA; prompt if required/unset |
+| DIVELOG_GARMIN_REQUEST_INTERVAL | 2s, positive duration |
+| DIVELOG_DEEPL_API_KEY | Optional; no key means no outgoing translation calls |
+| DIVELOG_DEEPL_TARGET_LANG | EN-GB; EN-US also supported |
+| DIVELOG_DEEPL_REQUEST_INTERVAL | 2s, positive duration |
+| DIVELOG_DEEPL_API_URL | api-free.deepl.com for :fx key, otherwise api.deepl.com; HTTPS origin |
+| DIVELOG_DEEPL_GLOSSARY_ID | Optional FR→EN glossary identifier |
+| DIVELOG_GEOCODING_ENABLED | true; false disables outgoing lookup but retains cache/reconciliation |
+| DIVELOG_GEOCODING_URL | https://nominatim.openstreetmap.org; compatible reverse-geocoding origin |
+| DIVELOG_GEOCODING_INTERVAL | 15s; public Nominatim rejects a shorter configured gap |
+| DIVELOG_GEOCODING_USER_AGENT | Identifying application/repository string; at least 8 characters, no CR/LF |
+| DIVELOG_LOG_LEVEL | info; debug/info/warn/error/fatal supported |
 
 Provider URLs permit HTTP only for loopback proxies/tests, disallow embedded
 credentials/query/fragment/non-root path, and do not follow redirects. No DeepL
@@ -204,7 +212,7 @@ The pending inbox is polled automatically; normal activity directories still nee
 their explicit scan after runtime copies. Install `exiftool` locally through
 Homebrew or `libimage-exiftool-perl` on Debian/Ubuntu. Docker includes it. The
 [inbox guide](pending-media.md) covers private APIs, timezone assumptions and
-recovery. Upgrade both serve/sync roles for schema 12.
+recovery. Upgrade both serve/sync roles for schema 13.
 
 ## Observability and recovery
 

@@ -25,29 +25,49 @@ type Config struct {
 	Interval            time.Duration
 }
 
+type Settings struct {
+	Enabled   bool   `yaml:"enabled" json:"enabled"`
+	URL       string `yaml:"url" json:"url"`
+	UserAgent string `yaml:"user_agent" json:"user_agent"`
+	Interval  string `yaml:"interval" json:"interval"`
+}
+
+func DefaultSettings() Settings {
+	return Settings{Enabled: true, URL: "https://nominatim.openstreetmap.org", UserAgent: "go-garmindives/1.0 (https://github.com/se0wtf/go-garmindives)", Interval: "15s"}
+}
+
 func FromEnvironment() (Config, error) {
-	c := Config{Endpoint: envutil.Default("GARMIN_GEOCODING_URL", "https://nominatim.openstreetmap.org"), UserAgent: envutil.Default("GARMIN_GEOCODING_USER_AGENT", "go-garmindives/1.0 (https://github.com/se0wtf/go-garmindives)")}
-	var err error
-	c.Enabled, err = strconv.ParseBool(envutil.Default("GARMIN_GEOCODING_ENABLED", "true"))
+	s := DefaultSettings()
+	s.URL = envutil.Default("DIVELOG_GEOCODING_URL", s.URL)
+	s.UserAgent = envutil.Default("DIVELOG_GEOCODING_USER_AGENT", s.UserAgent)
+	s.Interval = envutil.Default("DIVELOG_GEOCODING_INTERVAL", s.Interval)
+	enabled, err := strconv.ParseBool(envutil.Default("DIVELOG_GEOCODING_ENABLED", "true"))
 	if err != nil {
-		return c, errors.New("GARMIN_GEOCODING_ENABLED must be true or false")
+		return Config{}, errors.New("geocoding.enabled must be true or false")
 	}
-	c.Interval, err = time.ParseDuration(envutil.Default("GARMIN_GEOCODING_INTERVAL", "15s"))
+	s.Enabled = enabled
+	return ParseSettings(s)
+}
+
+func ParseSettings(s Settings) (Config, error) {
+	c := Config{Enabled: s.Enabled, Endpoint: s.URL, UserAgent: s.UserAgent}
+	var err error
+	c.Interval, err = time.ParseDuration(s.Interval)
 	if err != nil || c.Interval <= 0 {
-		return c, errors.New("GARMIN_GEOCODING_INTERVAL must be positive")
+		return c, errors.New("geocoding.interval must be positive")
 	}
 	u, err := url.Parse(c.Endpoint)
 	if err != nil || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
-		return c, errors.New("GARMIN_GEOCODING_URL must be an origin without credentials, path, or query")
+		return c, errors.New("geocoding.url must be an origin without credentials, path, or query")
 	}
 	if u.Scheme != "https" && !(u.Scheme == "http" && (u.Hostname() == "127.0.0.1" || u.Hostname() == "localhost" || u.Hostname() == "::1")) {
 		return c, errors.New("geocoding requires HTTPS except for loopback test/proxy servers")
 	}
 	if strings.EqualFold(u.Hostname(), "nominatim.openstreetmap.org") && c.Interval < 15*time.Second {
-		return c, errors.New("public Nominatim background requests require GARMIN_GEOCODING_INTERVAL of at least 15s")
+		return c, errors.New("public Nominatim background requests require geocoding.interval of at least 15s")
 	}
 	if len(c.UserAgent) < 8 || strings.ContainsAny(c.UserAgent, "\r\n") {
-		return c, errors.New("GARMIN_GEOCODING_USER_AGENT must identify your application")
+		return c, errors.New("geocoding.user_agent must identify your application")
 	}
 	c.Endpoint = strings.TrimRight(c.Endpoint, "/") + "/reverse"
 	return c, nil

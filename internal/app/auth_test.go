@@ -25,19 +25,28 @@ import (
 
 func clearApplicationEnvironment(t *testing.T) {
 	t.Helper()
-	for _, key := range []string{"GARMIN_CONFIG", "GARMIN_DB_TYPE", "GARMIN_DB_URI", "GARMIN_OUTPUT_TYPE", "GARMIN_OUTPUT_DSN", "GARMIN_API_ADDR", "GARMIN_PUBLIC_URL", "GARMIN_COOKIE_SECURE", "GARMIN_SESSION_LIFETIME", "GARMIN_SESSION_IDLE_TIMEOUT", "GARMIN_ASSETS_DIR", "GARMIN_MEDIA_MAX_UPLOAD_BYTES", "GARMIN_PENDING_DIR", "GARMIN_PENDING_SCAN_INTERVAL"} {
-		value, exists := os.LookupEnv(key)
-		os.Unsetenv(key)
-		t.Cleanup(func() {
-			if exists {
-				os.Setenv(key, value)
-			} else {
-				os.Unsetenv(key)
-			}
-		})
+	unsetTestEnvironment(t, "DIVELOG_CONFIG")
+	for _, setting := range appconfig.Settings() {
+		for _, name := range setting.Env {
+			unsetTestEnvironment(t, name)
+		}
 	}
 	clearDeepLEnvironment(t)
 	disableGeocodingForTest(t)
+}
+func unsetTestEnvironment(t *testing.T, name string) {
+	t.Helper()
+	value, exists := os.LookupEnv(name)
+	if err := os.Unsetenv(name); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if exists {
+			_ = os.Setenv(name, value)
+		} else {
+			_ = os.Unsetenv(name)
+		}
+	})
 }
 func bootstrapApplication(t *testing.T) (*application, appconfig.Loaded) {
 	t.Helper()

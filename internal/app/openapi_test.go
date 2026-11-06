@@ -68,7 +68,7 @@ func TestOpenAPIDocumentsEveryAPIRoute(t *testing.T) {
 	routes := map[string]bool{}
 	// Read actual route registration, so new endpoints cannot silently be left
 	// out of the frontend contract. Documentation/static UI routes are excluded.
-	for _, filename := range []string{"http.go", "http_media.go", "http_translations.go", "http_travel.go", "application.go", "http_auth.go", "http_admin_countries.go", "http_admin_fit.go", "http_admin_pending.go"} {
+	for _, filename := range []string{"http.go", "http_media.go", "http_translations.go", "http_travel.go", "application.go", "http_auth.go", "http_admin_countries.go", "http_admin_fit.go", "http_admin_pending.go", "http_admin_resync.go"} {
 		file, err := parser.ParseFile(token.NewFileSet(), filename, nil, 0)
 		if err != nil {
 			t.Fatal(err)
@@ -171,12 +171,13 @@ func TestOpenAPISchemasMatchResponseFields(t *testing.T) {
 		"DiveList": diveListResponse{}, "DiveYears": diveYearsResponse{}, "SampleList": sampleListResponse{},
 		"MediaItem": mediaItem{}, "MediaList": mediaListResponse{}, "MediaScanResult": mediaScanResult{},
 		"PhotoCapture": photoCapture{}, "PendingItem": pendingItem{}, "PendingCandidate": pendingCandidate{}, "PendingList": pendingListResponse{}, "PendingScanResult": pendingScanResult{}, "PendingScanStatus": pendingScanStatus{}, "PendingStatus": pendingStatusResponse{},
+		"ResyncJob": resyncJob{}, "ResyncItem": resyncItem{}, "ResyncStatus": resyncStatusResponse{}, "ResyncJobList": resyncJobList{}, "ResyncItemList": resyncItemList{},
 		"ErrorResponse":  httpx.ErrorResponse{},
 		"DiveCoverPhoto": diveCoverPhoto{},
 		"Translations":   translations{}, "EnglishTranslation": englishTranslation{}, "TranslationStatus": translationStatus{},
 		"Country": countrydata.Country{}, "HomeCountry": homeCountry{}, "DiveTrip": diveTrip{}, "TripList": tripListResponse{}, "TripDetail": tripDetail{}, "CountryLookupStatus": countryLookupStatus{},
 		"MissingCountryLookup": missingCountryLookup{}, "MissingCountryDive": missingCountryDive{}, "MissingCountryList": missingCountryListResponse{},
-		"SetupStatus": setupStatusResponse{}, "AuthSession": authSessionResponse{}, "Configuration": configurationResponse{}, "DatabaseDisplay": databaseDisplay{}, "HTTPSettings": appconfig.HTTP{}, "AuthSettings": appconfig.Auth{}, "MediaSettings": appconfig.Media{},
+		"SetupStatus": setupStatusResponse{}, "AuthSession": authSessionResponse{}, "Configuration": configurationResponse{}, "DatabaseDisplay": databaseDisplay{}, "HTTPSettings": appconfig.HTTP{}, "AuthSettings": appconfig.Auth{}, "MediaSettings": appconfig.Media{}, "GarminSettings": appconfig.Garmin{}, "TranslationSettings": appconfig.Translation{}, "GeocodingSettings": appconfig.Geocoding{}, "LoggingSettings": appconfig.Logging{},
 	} {
 		t.Run(name, func(t *testing.T) {
 			schema := openAPIObject(t, schemas[name])

@@ -4,11 +4,13 @@
 
 ## Configuration contract
 
-Select YAML with `-config` or `GARMIN_CONFIG`, default `config.yaml` in the command's
+Select YAML with `-config` or `DIVELOG_CONFIG`, default `config.yaml` in the command's
 working directory. File format is one YAML document with known fields only.
 Missing files use defaults and remain uninitialized. Invalid YAML, unknown fields,
 unsupported config version, or invalid application settings fail command startup.
-There is no ENV setting that marks an installation initialized.
+There is no flag or ENV setting that marks an installation initialized.
+The [complete runtime settings matrix](settings.md) covers every flag, ENV name,
+YAML key and default, including Garmin, DeepL, geocoding and logging.
 
 ```yaml
 version: 1
@@ -37,32 +39,34 @@ Preserve it during migrations and backups; it is not an API authentication secre
 Effective precedence is explicit flags > ENV > YAML > defaults. Canonical DB ENV
 names win over legacy aliases even when both exist. Keep base file settings
 separate from effective settings: saving configuration does not automatically
-write ENV-only secrets into YAML. Explicitly submitting a URI in a setup/config
-request does ask to persist that value, so omit managed properties to keep their
+write ENV/flag-only secrets into YAML. Explicit credentials in YAML are supported
+and preserved, but never returned by the configuration API or flag help.
+Explicitly submitting a URI in a setup/config request does ask to persist that value, so omit managed properties to keep their
 secrets entirely in ENV. ENV/flag-managed database values cannot be changed through
 the API to a different effective value.
 
 | YAML property | ENV | Default / validation |
 | --- | --- | --- |
-| database.type | GARMIN_DB_TYPE, alias GARMIN_OUTPUT_TYPE | sqlite; only sqlite/postgres |
-| database.uri | GARMIN_DB_URI, alias GARMIN_OUTPUT_DSN | dives.db; at most 8192 bytes |
-| http.listen | GARMIN_API_ADDR | 127.0.0.1:8080; nonempty |
-| http.cookie_secure | GARMIN_COOKIE_SECURE | true; boolean |
-| http.public_url | GARMIN_PUBLIC_URL | empty; HTTP(S) origin, no userinfo/query/fragment/path except `/` |
-| auth.session_lifetime | GARMIN_SESSION_LIFETIME | 24h; 1 minute to 720 hours |
-| auth.idle_timeout | GARMIN_SESSION_IDLE_TIMEOUT | 2h; at least 1 minute, no greater than lifetime |
-| media.directory | GARMIN_ASSETS_DIR | assets; nonempty |
-| media.max_upload_bytes | GARMIN_MEDIA_MAX_UPLOAD_BYTES | 16 GiB; positive integer, at most 2^60 |
-| media.pending_directory | GARMIN_PENDING_DIR | pending; relative to media.directory, or absolute; must not overlap owners/internal directories |
-| media.pending_scan_interval | GARMIN_PENDING_SCAN_INTERVAL | 60s; Go duration between 1s and 24h |
+| database.type | DIVELOG_DB_TYPE, alias DIVELOG_OUTPUT_TYPE | sqlite; only sqlite/postgres |
+| database.uri | DIVELOG_DB_URI, alias DIVELOG_OUTPUT_DSN | dives.db; at most 8192 bytes |
+| http.listen | DIVELOG_API_ADDR | 127.0.0.1:8080; nonempty |
+| http.cookie_secure | DIVELOG_COOKIE_SECURE | true; boolean |
+| http.public_url | DIVELOG_PUBLIC_URL | empty; HTTP(S) origin, no userinfo/query/fragment/path except `/` |
+| auth.session_lifetime | DIVELOG_SESSION_LIFETIME | 24h; 1 minute to 720 hours |
+| auth.idle_timeout | DIVELOG_SESSION_IDLE_TIMEOUT | 2h; at least 1 minute, no greater than lifetime |
+| media.directory | DIVELOG_ASSETS_DIR | assets; nonempty |
+| media.max_upload_bytes | DIVELOG_MEDIA_MAX_UPLOAD_BYTES | 16 GiB; positive integer, at most 2^60 |
+| media.pending_directory | DIVELOG_PENDING_DIR | pending; relative to media.directory, or absolute; must not overlap owners/internal directories |
+| media.pending_scan_interval | DIVELOG_PENDING_SCAN_INTERVAL | 60s; Go duration between 1s and 24h |
 
 Duration strings follow Go duration syntax, such as `2s`, `15s`, `2h`, `24h`;
 there is no `1d` spelling. A compatible port must parse these deployed values.
 The pending directory is relative to the resolved media root. Other relative
 paths in configuration/ENV resolve against the YAML directory, including
-relative `file:` SQLite URIs with preserved query options. Serve's relative
-`-output-dsn` also resolves there; sync's explicit relative `-output-dsn` is passed
-relative to its working directory. Use absolute command-line paths across roles.
+relative `file:` SQLite URIs with preserved query options. Relative `-token-file` /
+`-garmin-resync-token-file` values resolve against the working directory. Serve's relative `-db-uri` / `-output-dsn` also resolves against
+the YAML directory; sync's explicit relative SQL filename is passed relative to
+its working directory. Use absolute command-line paths across roles.
 
 SQLite requires persistent local storage: reject `:memory:`, `mode=memory`,
 non-file URL schemes, and nonlocal file authorities. PostgreSQL accepts the
@@ -75,7 +79,8 @@ volume must therefore be writable; binding only the file is insufficient.
 External YAML edits are loaded on restart, not watched live.
 
 `GET /api/v1/config` is private. It reports active and pending database displays,
-HTTP/auth/media settings, override sources, and `restart_required`. Database
+HTTP/auth/media/Garmin/translation/geocoding/logging settings, override sources,
+and `restart_required`. Credential fields are omitted. Database
 display includes destination identity without password/connection options; it is
 not the full URI. `PATCH /api/v1/config` accepts only a database type/URI object,
 validates syntax, and saves pending settings. It does not test the target by

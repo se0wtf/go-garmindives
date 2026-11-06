@@ -273,13 +273,17 @@ type databaseDisplay struct {
 	URIConfigured bool   `json:"uri_configured"`
 }
 type configurationResponse struct {
-	Database        databaseDisplay   `json:"database"`
-	PendingDatabase databaseDisplay   `json:"pending_database"`
-	HTTP            appconfig.HTTP    `json:"http"`
-	Auth            appconfig.Auth    `json:"auth"`
-	Media           appconfig.Media   `json:"media"`
-	Overrides       map[string]string `json:"overrides"`
-	RestartRequired bool              `json:"restart_required"`
+	Database        databaseDisplay       `json:"database"`
+	PendingDatabase databaseDisplay       `json:"pending_database"`
+	HTTP            appconfig.HTTP        `json:"http"`
+	Auth            appconfig.Auth        `json:"auth"`
+	Media           appconfig.Media       `json:"media"`
+	Garmin          appconfig.Garmin      `json:"garmin"`
+	Translation     appconfig.Translation `json:"translation"`
+	Geocoding       appconfig.Geocoding   `json:"geocoding"`
+	Logging         appconfig.Logging     `json:"logging"`
+	Overrides       map[string]string     `json:"overrides"`
+	RestartRequired bool                  `json:"restart_required"`
 }
 
 func displayDatabase(c appconfig.Database) databaseDisplay {
@@ -291,7 +295,7 @@ func (a *adminAuth) configResponse() configurationResponse {
 	if err != nil {
 		pending = c
 	}
-	return configurationResponse{Database: displayDatabase(c.Effective.Database), PendingDatabase: displayDatabase(pending.Effective.Database), HTTP: c.Effective.HTTP, Auth: c.Effective.Auth, Media: c.Effective.Media, Overrides: c.Overrides, RestartRequired: pending.Effective.Database != c.Effective.Database}
+	return configurationResponse{Database: displayDatabase(c.Effective.Database), PendingDatabase: displayDatabase(pending.Effective.Database), HTTP: c.Effective.HTTP, Auth: c.Effective.Auth, Media: c.Effective.Media, Garmin: c.Effective.Garmin, Translation: c.Effective.Translation, Geocoding: c.Effective.Geocoding, Logging: c.Effective.Logging, Overrides: c.Overrides, RestartRequired: pending.Effective.Database != c.Effective.Database}
 }
 func (a *adminAuth) getConfig(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, 200, a.configResponse())

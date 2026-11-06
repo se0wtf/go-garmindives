@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	appconfig "github.com/se0wtf/go-garmindives/internal/config"
 	"io"
 	"os"
 	"strings"
@@ -48,7 +49,7 @@ func (p *terminalPrompter) Line(ctx context.Context, label string) (string, erro
 
 func (p *terminalPrompter) Secret(ctx context.Context, label string) (string, error) {
 	if !term.IsTerminal(int(p.input.Fd())) {
-		return "", errors.New("password prompt requires a terminal; set GARMIN_PASSWORD")
+		return "", errors.New("password prompt requires a terminal; set DIVELOG_GARMIN_PASSWORD")
 	}
 	if _, err := fmt.Fprint(p.output, label); err != nil {
 		return "", err
@@ -93,8 +94,9 @@ func awaitPrompt(ctx context.Context, read func() (string, error), cancel func()
 }
 
 func readCredentials(ctx context.Context, prompt prompter) (credentials, error) {
-	email := strings.TrimSpace(os.Getenv("GARMIN_EMAIL"))
-	password := os.Getenv("GARMIN_PASSWORD")
+	return readConfiguredCredentials(ctx, prompt, strings.TrimSpace(os.Getenv("DIVELOG_GARMIN_EMAIL")), os.Getenv("DIVELOG_GARMIN_PASSWORD"))
+}
+func readConfiguredCredentials(ctx context.Context, prompt prompter, email, password string) (credentials, error) {
 	var err error
 	if email == "" {
 		email, err = prompt.Line(ctx, "Garmin email: ")
@@ -115,15 +117,18 @@ func readCredentials(ctx context.Context, prompt prompter) (credentials, error) 
 }
 
 func login(ctx context.Context, tokenFile string, prompt prompter, options ...garmin.Option) (*garmin.Client, error) {
+	return loginConfigured(ctx, tokenFile, prompt, appconfig.Garmin{Email: strings.TrimSpace(os.Getenv("DIVELOG_GARMIN_EMAIL")), Password: os.Getenv("DIVELOG_GARMIN_PASSWORD"), MFACode: strings.TrimSpace(os.Getenv("DIVELOG_GARMIN_MFA_CODE"))}, options...)
+}
+func loginConfigured(ctx context.Context, tokenFile string, prompt prompter, settings appconfig.Garmin, options ...garmin.Option) (*garmin.Client, error) {
 	if tokens, err := garmin.LoadTokens(tokenFile); err == nil && tokens.PersonalAPI {
-		return nil, errors.New("set GARMIN_PERSONAL_API_KEY to renew the cached Personal API session")
+		return nil, errors.New("set DIVELOG_GARMIN_PERSONAL_API_KEY to renew the cached Personal API session")
 	}
-	credentials, err := readCredentials(ctx, prompt)
+	credentials, err := readConfiguredCredentials(ctx, prompt, settings.Email, settings.Password)
 	if err != nil {
 		return nil, err
 	}
 	mfa := func(providerCtx context.Context) (string, error) {
-		if code := strings.TrimSpace(os.Getenv("GARMIN_MFA_CODE")); code != "" {
+		if code := strings.TrimSpace(settings.MFACode); code != "" {
 			return code, nil
 		}
 		return prompt.Line(providerCtx, "Garmin MFA code: ")
